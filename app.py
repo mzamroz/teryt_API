@@ -278,137 +278,103 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
 # --- KONIEC WERSJI find_terc_code Z DEBUGOWANIEM ---
 
 
+# --- WERSJA find_simc_symbol UŻYWAJĄCA PobierzListeMiejscowosciWGminie (poprawione parametry) ---
 def find_simc_symbol(client, locality_name, terc_gmi_full):
-    """Wyszukuje symbol SIMC miejscowości (7 cyfr), używając WyszukajMiejscowosc i filtrując po TERC gminy."""
+    """Wyszukuje symbol SIMC miejscowości (7 cyfr) na podstawie nazwy,
+       używając PobierzListeMiejscowosciWGminie."""
     if not client: return None
     if not locality_name:
         st.warning("Brak nazwy miejscowości do wyszukania SIMC.")
         return None
+    if not terc_gmi_full or len(terc_gmi_full) != 7 or not terc_gmi_full.isdigit():
+        st.warning(f"Brak prawidłowego kodu TERC gminy ('{terc_gmi_full}') do wyszukania SIMC.")
+        return None
 
     simc_symbol = None
     norm_locality_name = normalize_name(locality_name)
-    st.info(f"Szukam SIMC dla (norm): '{norm_locality_name}' [Metoda: WyszukajMiejscowosc + Filtrowanie TERC]")
+    # Rozbij kod TERC na części
+    try:
+        woj_id = terc_gmi_full[0:2]
+        pow_id = terc_gmi_full[2:4]
+        gmi_id = terc_gmi_full[4:6]
+        # rodz_id = terc_gmi_full[6:7] # Ta metoda nie używa Rodz wg komunikatu błędu
+    except IndexError:
+        st.error(f"Nie można rozbić kodu TERC '{terc_gmi_full}' na części.")
+        return None
+
+    # Zaktualizuj logowanie, aby pokazać używane parametry
+    st.info(f"Szukam SIMC dla (norm): '{norm_locality_name}' w gminie TERC: {terc_gmi_full} [Metoda: PobierzListeMiejscowosciWGminie(Wojewodztwo, Powiat, Gmina)]")
 
     try:
-        miejsc_result_general = None
-        with st.spinner(f"Wyszukiwanie miejscowości '{locality_name}'..."):
-            # Użycie WyszukajMiejscowosc, która wydaje się bardziej odpowiednia
-            miejsc_result_general = client.service.WyszukajMiejscowosc(nazwaMiejscowosci=locality_name)
+        miejsc_list_raw = None
+        with st.spinner(f"Pobieranie listy miejscowości dla gminy {terc_gmi_full} (W:{woj_id} P:{pow_id} G:{gmi_id})..."):
+            # --- POPRAWKA: Użycie parametrów Wojewodztwo, Powiat, Gmina i usunięcie Rodz ---
+            miejsc_list_raw = client.service.PobierzListeMiejscowosciWGminie(
+                Wojewodztwo=woj_id, # Poprawiona nazwa
+                Powiat=pow_id,      # Poprawiona nazwa
+                Gmina=gmi_id,       # Poprawiona nazwa
+                # Rodz=rodz_id,    # Usunięty parametr Rodz
+                DataStanu=TODAY_DATE_STR
+            )
 
-        if not miejsc_result_general:
-            st.warning(f"Nie znaleziono miejscowości '{locality_name}' w TERYT (wg WyszukajMiejscowosc).")
+        if not miejsc_list_raw:
+            st.warning(f"Nie znaleziono żadnych miejscowości w TERYT dla gminy TERC: {terc_gmi_full}.")
             return None
 
-        # Przygotowanie do filtrowania po TERC (jeśli dostępny)
-        terc_woj, terc_pow, terc_gmi, terc_rodz = (None,) * 4
-        filter_by_terc = False
-        if terc_gmi_full and len(terc_gmi_full) == 7:
-            filter_by_terc = True
-            terc_woj = terc_gmi_full[0:2]
-            terc_pow = terc_gmi_full[2:4]
-            terc_gmi = terc_gmi_full[4:6]
-            terc_rodz = terc_gmi_full[6:7]
-            st.write(f"Filtruję wyniki SIMC dla TERC: {terc_gmi_full} (W:{terc_woj} P:{terc_pow} G:{terc_gmi} R:{terc_rodz})")
+        found_locality = None
+        st.write(f"--- Analiza wyników dla Gminy {terc_gmi_full} ---")
+        st.write(f"[DEBUG] Szukam miejscowości pasującej do (z CSV, norm): '{norm_locality_name}'")
+        for m in miejsc_list_raw:
+            current_m_name_raw = getattr(m, 'NAZWA', '')
+            current_m_name_norm = normalize_name(current_m_name_raw)
+            current_m_simc = getattr(m, 'Symbol', '')
+            # --- DODATKOWE LOGOWANIE ---
+            st.write(f"[DEBUG Porównanie MIEJSCOWOŚCI] API: '{current_m_name_norm}' (raw: '{current_m_name_raw}', SIMC: '{current_m_simc}') vs CSV: '{norm_locality_name}'")
+            # --- KONIEC DODATKOWEGO LOGOWANIA ---
+            if current_m_name_norm == norm_locality_name:
+                found_locality = m
+                st.write(f"   -> Dopasowano!")
+                break # Znaleziono dokładne dopasowanie
 
-        potential_matches = []
-        st.write(f"--- Analiza wyników dla Miejscowości '{locality_name}' ---")
-        for i, m in enumerate(miejsc_result_general):
-            m_nazwa_raw = getattr(m, 'Nazwa', '')
-            m_nazwa_norm = normalize_name(m_nazwa_raw)
-            m_sym = getattr(m, 'Symbol', '')
-            m_woj = str(getattr(m, 'WojSymbol', '')).zfill(2)
-            m_pow = str(getattr(m, 'PowSymbol', '')).zfill(2)
-            m_gmi = str(getattr(m, 'GmiSymbol', '')).zfill(2) # GmiSymbol w wyniku to tylko 2 cyfry GMI
-            m_rodz = str(getattr(m, 'GmiRodzaj', '')) # GmiRodzaj w wyniku to RODZ
-
-            st.write(f" Wynik {i+1}: Nazwa='{m_nazwa_raw}' (Norm: '{m_nazwa_norm}'), Symbol='{m_sym}', TERC='{m_woj}{m_pow}{m_gmi}{m_rodz}'")
-
-            # Sprawdzenie dopasowania TERC (jeśli szukamy z TERC)
-            terc_match = False
-            if filter_by_terc:
-                if m_woj == terc_woj and m_pow == terc_pow and m_gmi == terc_gmi and m_rodz == terc_rodz:
-                    terc_match = True
-                    st.write("   -> TERC pasuje.")
-                else:
-                    #st.write("   -> TERC nie pasuje.") # Mniej gadatliwe logowanie
-                    continue # Przejdź do następnego wyniku, jeśli TERC nie pasuje
-            else:
-                terc_match = True # Jeśli nie filtrujemy po TERC, każdy wynik jest potencjalnie dobry
-
-            # Sprawdzenie dopasowania nazwy (po normalizacji)
-            name_match_exact = (m_nazwa_norm == norm_locality_name)
-            if name_match_exact:
-                 #st.write("   -> Nazwa pasuje dokładnie.") # Mniej gadatliwe
-                 potential_matches.append({'m': m, 'match_type': 'exact'})
-            # Można dodać logikę dla częściowego dopasowania, jeśli potrzebne
-            # elif norm_locality_name in m_nazwa_norm:
-            #     st.write("   -> Nazwa pasuje częściowo.")
-            #     potential_matches.append({'m': m, 'match_type': 'partial'})
-
-
-        # Wybór najlepszego dopasowania
-        best_match_obj = None
-        if potential_matches:
-            exact_matches = [p for p in potential_matches if p['match_type'] == 'exact']
-            if len(exact_matches) == 1:
-                 best_match_obj = exact_matches[0]['m']
-                 st.write("Wybrano jednoznaczne dokładne dopasowanie nazwy (i TERC, jeśli filtrowano).")
-            elif len(exact_matches) > 1:
-                 st.warning(f"Znaleziono {len(exact_matches)} dokładnych dopasowań nazwy dla '{locality_name}' (i TERC, jeśli filtrowano). Wybieram pierwsze.")
-                 best_match_obj = exact_matches[0]['m']
-            # Można dodać logikę wyboru dla częściowych dopasowań, jeśli nie ma dokładnych
-            # elif potential_matches:
-            #    best_match_obj = potential_matches[0]['m'] # Wybierz pierwszy jakikolwiek pasujący
-            #    st.warning("Brak dokładnego dopasowania nazwy, wybrano pierwszy pasujący TERC (jeśli filtrowano).")
-
-        # Jeśli nie znaleziono pasującego obiektu LUB jeśli filtrowaliśmy po TERC i nie znaleziono nic pasującego
-        if not best_match_obj:
-             if filter_by_terc:
-                  st.warning(f"Nie znaleziono miejscowości '{locality_name}' pasującej do TERC {terc_gmi_full}.")
-             elif miejsc_result_general: # Jeśli nie filtrowaliśmy, ale nie było dokładnego dopasowania nazwy
-                  st.warning(f"Brak dokładnego dopasowania nazwy dla '{locality_name}'. Zwracam pierwszy znaleziony wynik z API (posortowany).")
-                  try:
-                      # Sortuj wg dopasowania nazwy (nawet nieidealnego), potem wg symbolu
-                      miejsc_result_general.sort(key=lambda x: (
-                          normalize_name(getattr(x, 'Nazwa', '')) != norm_locality_name,
-                          int(getattr(x, 'Symbol', 0))
-                      ))
-                      best_match_obj = miejsc_result_general[0]
-                  except Exception as sort_e:
-                      st.error(f"Błąd sortowania wyników WyszukajMiejscowosc: {sort_e}")
-                      if miejsc_result_general: best_match_obj = miejsc_result_general[0] # Spróbuj wziąć pierwszy niesortowany
-
-
-        # Pobranie symbolu SIMC z najlepszego dopasowania
-        if best_match_obj:
-            simc_symbol_candidate = getattr(best_match_obj, 'Symbol', None)
+        if found_locality:
+            simc_symbol_candidate = getattr(found_locality, 'Symbol', None)
             if simc_symbol_candidate:
                 simc_symbol = str(simc_symbol_candidate).zfill(7)
                 if len(simc_symbol) == 7 and simc_symbol.isdigit():
-                    st.success(f"=> Znaleziono SIMC: {simc_symbol} dla '{getattr(best_match_obj, 'Nazwa', '')}'")
+                    st.success(f"=> Znaleziono SIMC: {simc_symbol} dla '{getattr(found_locality, 'NAZWA', '')}' w gminie {terc_gmi_full}")
                 else:
-                    st.warning(f"Znaleziony symbol SIMC '{simc_symbol}' ma nieprawidłowy format.")
+                    st.warning(f"Znaleziony symbol SIMC '{simc_symbol}' dla miejscowości '{getattr(found_locality, 'NAZWA', '')}' ma nieprawidłowy format.")
                     simc_symbol = None # Resetuj, jeśli format zły
             else:
-                 st.warning(f"Wybrany obiekt miejscowości '{getattr(best_match_obj, 'Nazwa', '')}' nie ma atrybutu 'Symbol'.")
-        # else: # Komunikat o braku dopasowania jest już wyżej
-        #      st.warning(f"Nie udało się wybrać jednoznacznego dopasowania dla miejscowości '{locality_name}'" + (f" w gminie {terc_gmi_full}." if filter_by_terc else "."))
+                 st.warning(f"Znaleziona miejscowość '{getattr(found_locality, 'NAZWA', '')}' nie ma atrybutu 'Symbol'.")
+        else:
+             st.error(f"Nie znaleziono miejscowości o nazwie (po normalizacji): '{norm_locality_name}' w gminie TERC {terc_gmi_full}.")
+             # Opcjonalnie: Pokaż listę dostępnych miejscowości dla debugowania
+             # available_loc = [f"{normalize_name(getattr(m, 'NAZWA', ''))} (SIMC: {getattr(m, 'Symbol', '')})" for m in miejsc_list_raw]
+             # st.info(f"Dostępne miejscowości w gminie (znormalizowane): {', '.join(available_loc)}")
 
 
     except Fault as f:
-        st.error(f"Błąd SOAP podczas wyszukiwania SIMC dla '{locality_name}': {f.message}")
+        st.error(f"Błąd SOAP podczas wyszukiwania SIMC dla gminy '{terc_gmi_full}': {f.message}")
         if f.detail is not None:
              st.error(f"Szczegóły błędu SOAP: {etree.tostring(f.detail, pretty_print=True).decode()}")
     except TypeError as te:
-        st.error(f"Błąd typu (TypeError) podczas wywołania API dla SIMC '{locality_name}': {te}")
+        # Zaktualizowany komunikat błędu TypeError
+        st.error(f"Błąd typu (TypeError) podczas wywołania API dla SIMC w gminie '{terc_gmi_full}': {te}. Sprawdź parametry: Wojewodztwo, Powiat, Gmina, DataStanu.")
+        st.error(traceback.format_exc()) # Pokaż pełny traceback
     except Exception as e:
-        st.error(f"Nieoczekiwany błąd podczas wyszukiwania SIMC dla '{locality_name}': {e}")
+        st.error(f"Nieoczekiwany błąd podczas wyszukiwania SIMC w gminie '{terc_gmi_full}': {e}")
+        st.error(traceback.format_exc()) # Pokaż pełny traceback
 
     # Ostateczne sprawdzenie przed zwróceniem
     if simc_symbol and isinstance(simc_symbol, str) and len(simc_symbol) == 7 and simc_symbol.isdigit():
         return simc_symbol
     else:
         return None
+# --- KONIEC NOWEJ WERSJI find_simc_symbol ---
+
+
+
 
 
 # --- POPRAWIONA WERSJA get_streets Z PRAWIDŁOWYMI NAZWAMI PARAMETRÓW ---
