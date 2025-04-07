@@ -117,7 +117,7 @@ def normalize_name(name):
     name = name.replace('m.st. ', '') # np. 'm.st. Warszawa' -> 'warszawa'
     return name
 
-# --- NOWA WERSJA find_terc_code UŻYWAJĄCA PobierzListe* ---
+# --- POPRAWIONA WERSJA find_terc_code (Naprawione nazwy parametrów Woj/Pow) ---
 def find_terc_code(client, woj_name, pow_name, gmi_name):
     """Wyszukuje kod TERC gminy (7 cyfr) na podstawie nazw, używając metod PobierzListe*."""
     if not client: return None
@@ -132,7 +132,7 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
     norm_gmi_name_alt = re.sub(r"^gm\.?\s+", "", norm_gmi_name).strip()
 
 
-    st.info(f"Szukam TERC dla (norm): Woj='{norm_woj_name}', Pow='{norm_pow_name}', Gmi='{norm_gmi_name}' [Metoda: PobierzListe*]")
+    st.info(f"Szukam TERC dla (norm): Woj='{norm_woj_name}', Pow='{norm_pow_name}', Gmi='{norm_gmi_name}'/'{norm_gmi_name_alt}' [Metoda: PobierzListe*]")
 
     woj_symbol = None
     pow_symbol = None
@@ -142,6 +142,7 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
 
     try:
         # --- Krok 1: Znajdź WOJ ---
+        st.write("--- Etap 1: Wyszukiwanie Województwa ---")
         with st.spinner(f"1. Pobieranie listy województw..."):
             woj_list_raw = client.service.PobierzListeWojewodztw(DataStanu=TODAY_DATE_STR)
 
@@ -150,12 +151,15 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
             return None
 
         found_woj = None
+        st.write(f"[DEBUG] Szukam województwa pasującego do (z CSV, norm): '{norm_woj_name}'") # DEBUG
         for woj in woj_list_raw:
             current_woj_name_raw = getattr(woj, 'NAZWA', '')
             current_woj_name_norm = normalize_name(current_woj_name_raw)
+            st.write(f"[DEBUG Porównanie WOJ] API: '{current_woj_name_norm}' (raw: '{current_woj_name_raw}') vs CSV: '{norm_woj_name}'")
             if current_woj_name_norm == norm_woj_name:
                 found_woj = woj
-                break # Znaleziono dokładne dopasowanie
+                st.write(f"   -> Dopasowano!") # DEBUG
+                break
 
         if found_woj:
             woj_symbol_candidate = getattr(found_woj, 'WOJ', None)
@@ -167,26 +171,27 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
                 return None
         else:
             st.error(f"Nie znaleziono województwa o nazwie (po normalizacji): '{norm_woj_name}'")
-            # Opcjonalnie: Pokaż listę dostępnych województw dla debugowania
-            # available_woj = [f"{normalize_name(getattr(w, 'NAZWA', ''))} ({getattr(w, 'WOJ', '')})" for w in woj_list_raw]
-            # st.info(f"Dostępne województwa (znormalizowane): {', '.join(available_woj)}")
             return None
 
         # --- Krok 2: Znajdź POW ---
+        st.write("--- Etap 2: Wyszukiwanie Powiatu ---")
         with st.spinner(f"2. Pobieranie listy powiatów dla woj. {woj_symbol}..."):
-            # Upewnij się, że przekazujesz symbol WOJ jako string
-            pow_list_raw = client.service.PobierzListePowiatow(Wojewodztwo=woj_symbol, DataStanu=TODAY_DATE_STR)
+            # --- POPRAWKA: Użycie parametru 'Woj' zamiast 'Wojewodztwo' ---
+            pow_list_raw = client.service.PobierzListePowiatow(Woj=woj_symbol, DataStanu=TODAY_DATE_STR)
 
         if not pow_list_raw:
             st.error(f"Nie udało się pobrać listy powiatów dla województwa {woj_symbol}.")
             return None
 
         found_pow = None
+        st.write(f"[DEBUG] Szukam powiatu pasującego do (z CSV, norm): '{norm_pow_name}'") # DEBUG
         for pow_ in pow_list_raw:
             current_pow_name_raw = getattr(pow_, 'NAZWA', '')
             current_pow_name_norm = normalize_name(current_pow_name_raw)
+            st.write(f"[DEBUG Porównanie POW] API: '{current_pow_name_norm}' (raw: '{current_pow_name_raw}') vs CSV: '{norm_pow_name}'")
             if current_pow_name_norm == norm_pow_name:
                 found_pow = pow_
+                st.write(f"   -> Dopasowano!") # DEBUG
                 break
 
         if found_pow:
@@ -199,15 +204,13 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
                 return None
         else:
             st.error(f"Nie znaleziono powiatu o nazwie (po normalizacji): '{norm_pow_name}' w woj. {woj_symbol}")
-            # Opcjonalnie: Pokaż listę dostępnych powiatów dla debugowania
-            # available_pow = [f"{normalize_name(getattr(p, 'NAZWA', ''))} ({getattr(p, 'POW', '')})" for p in pow_list_raw]
-            # st.info(f"Dostępne powiaty (znormalizowane): {', '.join(available_pow)}")
             return None
 
         # --- Krok 3: Znajdź GMI + RODZ ---
+        st.write("--- Etap 3: Wyszukiwanie Gminy ---")
         with st.spinner(f"3. Pobieranie listy gmin dla pow. {woj_symbol}{pow_symbol}..."):
-            # Upewnij się, że przekazujesz symbole WOJ i POW jako stringi
-            gmi_list_raw = client.service.PobierzListeGmin(Wojewodztwo=woj_symbol, Powiat=pow_symbol, DataStanu=TODAY_DATE_STR)
+             # --- POPRAWKA: Użycie parametrów 'Woj' i 'Pow' zamiast 'Wojewodztwo' i 'Powiat' ---
+            gmi_list_raw = client.service.PobierzListeGmin(Woj=woj_symbol, Pow=pow_symbol, DataStanu=TODAY_DATE_STR)
 
         if not gmi_list_raw:
             st.error(f"Nie udało się pobrać listy gmin dla powiatu {woj_symbol}{pow_symbol}.")
@@ -215,11 +218,13 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
 
         found_gmi = None
         possible_matches = []
+        st.write(f"[DEBUG] Szukam gminy pasującej do (z CSV, norm): '{norm_gmi_name}' lub '{norm_gmi_name_alt}'") # DEBUG
         for gmi in gmi_list_raw:
             current_gmi_name_raw = getattr(gmi, 'NAZWA', '')
             current_gmi_name_norm = normalize_name(current_gmi_name_raw)
-            # Porównaj z obiema znormalizowanymi formami nazwy gminy
+            st.write(f"[DEBUG Porównanie GMI] API: '{current_gmi_name_norm}' (raw: '{current_gmi_name_raw}') vs CSV: '{norm_gmi_name}' lub '{norm_gmi_name_alt}'")
             if current_gmi_name_norm == norm_gmi_name or current_gmi_name_norm == norm_gmi_name_alt:
+                st.write(f"   -> Dopasowano!") # DEBUG
                 possible_matches.append(gmi)
 
         if len(possible_matches) == 1:
@@ -227,9 +232,7 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
             st.write(f"Znaleziono jednoznaczne dopasowanie gminy: '{getattr(found_gmi, 'NAZWA', '')}'")
         elif len(possible_matches) > 1:
             st.warning(f"Znaleziono {len(possible_matches)} gminy pasujące do nazwy '{gmi_name}' (norm: '{norm_gmi_name}'/'{norm_gmi_name_alt}'). Wybieram pierwszą.")
-            # Można dodać logikę wyboru, np. na podstawie typu gminy, jeśli jest dostępny w CSV
             found_gmi = possible_matches[0] # Wybierz pierwszą jako domyślną
-        # else: found_gmi pozostaje None
 
         if found_gmi:
             gmi_symbol_candidate = getattr(found_gmi, 'GMI', None)
@@ -246,9 +249,6 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
                 return None
         else:
             st.error(f"Nie znaleziono gminy o nazwie (po normalizacji): '{norm_gmi_name}' lub '{norm_gmi_name_alt}' w pow. {woj_symbol}{pow_symbol}")
-            # Opcjonalnie: Pokaż listę dostępnych gmin dla debugowania
-            # available_gmi = [f"{normalize_name(getattr(g, 'NAZWA', ''))} ({getattr(g, 'GMI', '')}{getattr(g, 'RODZ', '')})" for g in gmi_list_raw]
-            # st.info(f"Dostępne gminy (znormalizowane): {', '.join(available_gmi)}")
             return None
 
     except Fault as f:
@@ -257,10 +257,15 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
              st.error(f"Szczegóły błędu SOAP: {etree.tostring(f.detail, pretty_print=True).decode()}")
         return None
     except TypeError as te:
-        st.error(f"Błąd typu (TypeError) podczas wyszukiwania TERC (PobierzListe*): {te}. Sprawdź nazwy i typy argumentów przekazywanych do API.")
+        # Dodaj więcej informacji do błędu TypeError
+        st.error(f"Błąd typu (TypeError) podczas wyszukiwania TERC (PobierzListe*): {te}. Sprawdź nazwy i typy argumentów przekazywanych do API (np. Woj, Pow, DataStanu).")
+        import traceback
+        st.error(traceback.format_exc()) # Pokaż pełny traceback
         return None
     except Exception as e:
         st.error(f"Nieoczekiwany błąd podczas wyszukiwania TERC (PobierzListe*): {e}")
+        import traceback
+        st.error(traceback.format_exc()) # Pokaż pełny traceback
         return None
 
     # Ostateczna walidacja formatu
@@ -269,7 +274,8 @@ def find_terc_code(client, woj_name, pow_name, gmi_name):
     else:
         st.warning(f"Ostateczny kod TERC '{full_terc}' ma nieprawidłowy format lub nie został znaleziony.")
         return None
-# --- KONIEC NOWEJ WERSJI find_terc_code ---
+
+# --- KONIEC WERSJI find_terc_code Z DEBUGOWANIEM ---
 
 
 def find_simc_symbol(client, locality_name, terc_gmi_full):
@@ -295,7 +301,9 @@ def find_simc_symbol(client, locality_name, terc_gmi_full):
 
         # Przygotowanie do filtrowania po TERC (jeśli dostępny)
         terc_woj, terc_pow, terc_gmi, terc_rodz = (None,) * 4
+        filter_by_terc = False
         if terc_gmi_full and len(terc_gmi_full) == 7:
+            filter_by_terc = True
             terc_woj = terc_gmi_full[0:2]
             terc_pow = terc_gmi_full[2:4]
             terc_gmi = terc_gmi_full[4:6]
@@ -317,12 +325,12 @@ def find_simc_symbol(client, locality_name, terc_gmi_full):
 
             # Sprawdzenie dopasowania TERC (jeśli szukamy z TERC)
             terc_match = False
-            if terc_gmi_full:
+            if filter_by_terc:
                 if m_woj == terc_woj and m_pow == terc_pow and m_gmi == terc_gmi and m_rodz == terc_rodz:
                     terc_match = True
                     st.write("   -> TERC pasuje.")
                 else:
-                    st.write("   -> TERC nie pasuje.")
+                    #st.write("   -> TERC nie pasuje.") # Mniej gadatliwe logowanie
                     continue # Przejdź do następnego wyniku, jeśli TERC nie pasuje
             else:
                 terc_match = True # Jeśli nie filtrujemy po TERC, każdy wynik jest potencjalnie dobry
@@ -330,7 +338,7 @@ def find_simc_symbol(client, locality_name, terc_gmi_full):
             # Sprawdzenie dopasowania nazwy (po normalizacji)
             name_match_exact = (m_nazwa_norm == norm_locality_name)
             if name_match_exact:
-                 st.write("   -> Nazwa pasuje dokładnie.")
+                 #st.write("   -> Nazwa pasuje dokładnie.") # Mniej gadatliwe
                  potential_matches.append({'m': m, 'match_type': 'exact'})
             # Można dodać logikę dla częściowego dopasowania, jeśli potrzebne
             # elif norm_locality_name in m_nazwa_norm:
@@ -342,26 +350,33 @@ def find_simc_symbol(client, locality_name, terc_gmi_full):
         best_match_obj = None
         if potential_matches:
             exact_matches = [p for p in potential_matches if p['match_type'] == 'exact']
-            if len(exact_matches) >= 1:
-                # Jeśli jest wiele dokładnych dopasowań (rzadkie, ale możliwe), wybierz pierwsze
-                best_match_obj = exact_matches[0]['m']
-                st.write("Wybrano pierwsze dokładne dopasowanie nazwy (i TERC, jeśli filtrowano).")
+            if len(exact_matches) == 1:
+                 best_match_obj = exact_matches[0]['m']
+                 st.write("Wybrano jednoznaczne dokładne dopasowanie nazwy (i TERC, jeśli filtrowano).")
+            elif len(exact_matches) > 1:
+                 st.warning(f"Znaleziono {len(exact_matches)} dokładnych dopasowań nazwy dla '{locality_name}' (i TERC, jeśli filtrowano). Wybieram pierwsze.")
+                 best_match_obj = exact_matches[0]['m']
             # Można dodać logikę wyboru dla częściowych dopasowań, jeśli nie ma dokładnych
             # elif potential_matches:
             #    best_match_obj = potential_matches[0]['m'] # Wybierz pierwszy jakikolwiek pasujący
             #    st.warning("Brak dokładnego dopasowania nazwy, wybrano pierwszy pasujący TERC (jeśli filtrowano).")
 
-        # Jeśli nie znaleziono pasującego (lub nie filtrowano i nie było dokładnego dopasowania nazwy)
-        if not best_match_obj and not terc_gmi_full and miejsc_result_general:
-             st.warning(f"Brak dokładnego dopasowania nazwy dla '{locality_name}'. Zwracam pierwszy znaleziony wynik z API.")
-             # Sortowanie może pomóc uzyskać bardziej prawdopodobny wynik
-             try:
-                 miejsc_result_general.sort(key=lambda x: (
-                     normalize_name(getattr(x, 'Nazwa', '')) != norm_locality_name, # Najpierw te z pasującą nazwą (nawet jeśli nie 'exact' wg logiki wyżej)
-                     int(getattr(x, 'Symbol', 0)) # Potem wg symbolu
-                 ))
-             except: pass # Ignoruj błędy sortowania
-             best_match_obj = miejsc_result_general[0]
+        # Jeśli nie znaleziono pasującego obiektu LUB jeśli filtrowaliśmy po TERC i nie znaleziono nic pasującego
+        if not best_match_obj:
+             if filter_by_terc:
+                  st.warning(f"Nie znaleziono miejscowości '{locality_name}' pasującej do TERC {terc_gmi_full}.")
+             elif miejsc_result_general: # Jeśli nie filtrowaliśmy, ale nie było dokładnego dopasowania nazwy
+                  st.warning(f"Brak dokładnego dopasowania nazwy dla '{locality_name}'. Zwracam pierwszy znaleziony wynik z API (posortowany).")
+                  try:
+                      # Sortuj wg dopasowania nazwy (nawet nieidealnego), potem wg symbolu
+                      miejsc_result_general.sort(key=lambda x: (
+                          normalize_name(getattr(x, 'Nazwa', '')) != norm_locality_name,
+                          int(getattr(x, 'Symbol', 0))
+                      ))
+                      best_match_obj = miejsc_result_general[0]
+                  except Exception as sort_e:
+                      st.error(f"Błąd sortowania wyników WyszukajMiejscowosc: {sort_e}")
+                      if miejsc_result_general: best_match_obj = miejsc_result_general[0] # Spróbuj wziąć pierwszy niesortowany
 
 
         # Pobranie symbolu SIMC z najlepszego dopasowania
@@ -376,8 +391,8 @@ def find_simc_symbol(client, locality_name, terc_gmi_full):
                     simc_symbol = None # Resetuj, jeśli format zły
             else:
                  st.warning(f"Wybrany obiekt miejscowości '{getattr(best_match_obj, 'Nazwa', '')}' nie ma atrybutu 'Symbol'.")
-        else:
-             st.warning(f"Nie udało się wybrać jednoznacznego dopasowania dla miejscowości '{locality_name}'" + (f" w gminie {terc_gmi_full}." if terc_gmi_full else "."))
+        # else: # Komunikat o braku dopasowania jest już wyżej
+        #      st.warning(f"Nie udało się wybrać jednoznacznego dopasowania dla miejscowości '{locality_name}'" + (f" w gminie {terc_gmi_full}." if filter_by_terc else "."))
 
 
     except Fault as f:
@@ -421,10 +436,6 @@ def get_streets(client, full_terc_code, simc_symbol):
         st.info(f"Pobieram ulice dla TERC={full_terc_code}, SIMC={simc_symbol} [Metoda: PobierzListeUlicDlaMiejscowosci]")
         with st.spinner(f"Pobieranie ulic dla SIMC: {simc_symbol}..."):
             # --- POPRAWKA: Użycie nazw parametrów zgodnych z WSDL ---
-            # Zamiast WojewodztwoId -> Wojewodztwo
-            # Zamiast PowiatId -> Powiat
-            # Zamiast GminaId -> Gmina
-            # GminaRodzaj i MiejscowoscId wydają się OK, DataStanu też
             streets_result = client.service.PobierzListeUlicDlaMiejscowosci(
                 Wojewodztwo=woj_id,      # Poprawiona nazwa
                 Powiat=pow_id,         # Poprawiona nazwa
@@ -435,7 +446,6 @@ def get_streets(client, full_terc_code, simc_symbol):
             )
 
             # Sprawdzenie, czy wynik zawiera listę ulic
-            # Struktura odpowiedzi może być różna, np. bezpośrednio lista lub obiekt z polem 'Ulica'
             ulice_list = None
             if streets_result:
                  if isinstance(streets_result, list):
@@ -449,7 +459,7 @@ def get_streets(client, full_terc_code, simc_symbol):
                 for ulica in ulice_list:
                     # Sprawdzenie czy obiekt ulicy ma potrzebne atrybuty
                     if not hasattr(ulica, 'Identyfikator') or not getattr(ulica, 'Identyfikator', None):
-                        st.warning(f"Pominięto ulicę bez identyfikatora: {getattr(ulica, 'Nazwa1', 'Brak nazwy')}")
+                        #st.warning(f"Pominięto ulicę bez identyfikatora: {getattr(ulica, 'Nazwa1', 'Brak nazwy')}")
                         continue
 
                     id_ulic = getattr(ulica, 'Identyfikator')
@@ -470,7 +480,7 @@ def get_streets(client, full_terc_code, simc_symbol):
                         if symbol_ulic_candidate and isinstance(symbol_ulic_candidate, str) and symbol_ulic_candidate.isdigit():
                             symbol_ulic = symbol_ulic_candidate.zfill(5)
                             if len(symbol_ulic) != 5:
-                                st.warning(f"Symbol ULIC '{symbol_ulic_candidate}' dla ulicy '{full_street_name}' ma nieprawidłową długość po uzupełnieniu.")
+                                #st.warning(f"Symbol ULIC '{symbol_ulic_candidate}' dla ulicy '{full_street_name}' ma nieprawidłową długość po uzupełnieniu.")
                                 symbol_ulic = None # Zresetuj, jeśli zły format
 
                         if full_street_name and symbol_ulic: # Dodaj tylko jeśli mamy nazwę i poprawny symbol
@@ -480,8 +490,8 @@ def get_streets(client, full_terc_code, simc_symbol):
                                 'Identyfikator': id_ulic
                             })
                             seen_ids.add(id_ulic)
-                        else:
-                             st.warning(f"Pominięto ulicę z brakującą nazwą lub nieprawidłowym symbolem ULIC: ID={id_ulic}, Nazwa='{full_street_name}', Symbol='{symbol_ulic_candidate}'")
+                        # else:
+                             #st.warning(f"Pominięto ulicę z brakującą nazwą lub nieprawidłowym symbolem ULIC: ID={id_ulic}, Nazwa='{full_street_name}', Symbol='{symbol_ulic_candidate}'")
 
         if not all_streets:
             st.info(f"Nie znaleziono żadnych ulic (z poprawnymi danymi) dla SIMC: {simc_symbol} (TERC: {full_terc_code}).")
@@ -610,7 +620,8 @@ if df_kody is not None and postal_code:
     elif len(postal_code_csv) == 5 and postal_code_csv.isdigit():
         postal_code_csv = f"{postal_code_csv[:2]}-{postal_code_csv[2:]}" # Zamień XXXXX na XX-XXX
     else:
-        st.warning(f"Nieprawidłowy format kodu pocztowego: '{postal_code}'. Oczekiwano XX-XXX lub XXXXX.")
+        if postal_code: # Pokaż ostrzeżenie tylko jeśli coś wpisano
+             st.warning(f"Nieprawidłowy format kodu pocztowego: '{postal_code}'. Oczekiwano XX-XXX lub XXXXX.")
         postal_code_csv = None # Zresetuj, jeśli format zły
 
     if postal_code_csv and 'PNA' in df_kody.columns:
@@ -651,7 +662,7 @@ if df_kody is not None and postal_code:
         except Exception as e:
             st.error(f"Błąd podczas filtrowania CSV dla kodu {postal_code_csv}: {e}")
             localities_list = [""]
-    elif 'PNA' not in df_kody.columns and df_kody is not None:
+    elif postal_code_csv and 'PNA' not in df_kody.columns and df_kody is not None: # Sprawdź czy kod był poprawny
         st.error("W pliku CSV brakuje kolumny 'PNA'.")
         localities_list = [""]
 
@@ -662,7 +673,11 @@ selected_locality_prev = st.session_state._selected_locality
 
 # Użyj wartości ze stanu sesji jako indeksu startowego dla selectboxa
 try:
-    current_locality_index = localities_list.index(st.session_state._selected_locality)
+    # Upewnij się, że lista nie jest pusta przed szukaniem indeksu
+    if localities_list:
+        current_locality_index = localities_list.index(st.session_state._selected_locality)
+    else:
+        current_locality_index = 0
 except ValueError:
     current_locality_index = 0 # Jeśli zapisana wartość nie istnieje na liście, wybierz pustą
 
@@ -714,9 +729,6 @@ with col3: st.metric("Gmina (z CSV)", display_gmi)
 
 # --- Logika Interakcji z TERYT ---
 # Sprawdź, czy trzeba pobrać dane TERYT:
-# 1. Wybrano miejscowość
-# 2. Jest aktywne połączenie z TERYT (klient istnieje)
-# 3. Wybrana miejscowość jest inna niż ostatnio przetwarzana LUB dane TERYT nie zostały jeszcze pobrane (np. po zmianie kodu pocztowego)
 needs_teryt_fetch = (
     selected_locality and client and
     (st.session_state._last_processed_locality != selected_locality)
@@ -740,7 +752,7 @@ if needs_teryt_fetch:
 
     # Sprawdź, czy mamy wszystkie potrzebne nazwy
     if woj_name and pow_name and gmi_name:
-        # Krok 1: Znajdź TERC (nowa metoda)
+        # Krok 1: Znajdź TERC (nowa metoda z logowaniem)
         st.session_state._terc_code_found = find_terc_code(client, woj_name, pow_name, gmi_name)
 
         # Krok 2: Znajdź SIMC (używa nazwy miejscowości i opcjonalnie TERC do filtrowania)
@@ -757,7 +769,7 @@ if needs_teryt_fetch:
         st.warning("Brak pełnych danych adresowych (woj/pow/gmi) z pliku CSV, aby wyszukać dane TERYT.")
 
     st.info("Zakończono pobieranie danych TERYT.")
-    st.rerun() # Odśwież interfejs, aby pokazać nowe dane TERYT i zaktualizować listę ulic
+    # st.rerun() # Odśwież interfejs, aby pokazać nowe dane TERYT i zaktualizować listę ulic
 
 # --- Wyświetlanie statusu TERYT (wyników pobierania) ---
 st.subheader("Status Danych TERYT")
@@ -768,21 +780,20 @@ if selected_locality:
 
         if terc_to_display:
             st.success(f"Znaleziony TERC gminy: {terc_to_display}")
-        elif st.session_state._last_processed_locality == selected_locality: # Jeśli próbowano pobrać dla tej miejscowości
-             st.warning("Nie udało się znaleźć kodu TERC gminy w TERYT.")
+        # Pokaż ostrzeżenie tylko jeśli próbowano pobrać TERC dla tej miejscowości i się nie udało
+        elif st.session_state._last_processed_locality == selected_locality:
+             st.warning("Nie udało się znaleźć kodu TERC gminy w TERYT (sprawdź logi porównania nazw powyżej).")
 
         if simc_to_display:
             st.success(f"Znaleziony SIMC miejscowości: {simc_to_display}")
-        elif st.session_state._last_processed_locality == selected_locality: # Jeśli próbowano pobrać
+        # Pokaż ostrzeżenie tylko jeśli próbowano pobrać SIMC dla tej miejscowości i się nie udało
+        elif st.session_state._last_processed_locality == selected_locality:
              st.warning("Nie udało się znaleźć symbolu SIMC miejscowości w TERYT.")
 
-        # Komunikaty o błędach i ostrzeżenia są teraz głównie wewnątrz funkcji find_* i get_*
     elif st.session_state._teryt_user_input: # Wybrano miejscowość, wpisano login, ale nie ma połączenia
         st.warning("Połączenie z TERYT nie jest aktywne. Sprawdź dane i kliknij 'Połącz'.")
     else: # Wybrano miejscowość, ale nie podano danych logowania
         st.info("Połącz z TERYT (w panelu bocznym), aby pobrać dane SIMC i listę ulic.")
-# else: # Nie wybrano miejscowości
-#     st.info("Wybierz miejscowość, aby zobaczyć status TERYT.")
 
 
 # --- Wybór ulicy ---
@@ -794,14 +805,16 @@ teryt_streets_from_state = st.session_state._teryt_streets # Pobierz listę ulic
 if teryt_streets_from_state:
     # Dodaj posortowane nazwy ulic
     street_options_display.extend(sorted([s['Nazwa'] for s in teryt_streets_from_state]))
+# Sprawdź, czy próbowano pobrać ulice dla tej miejscowości i czy lista jest pusta
 elif st.session_state._simc_symbol_found and st.session_state._terc_code_found and client and st.session_state._last_processed_locality == selected_locality:
-    # Jeśli próbowano pobrać ulice (mamy SIMC i TERC), ale lista jest pusta
     street_options_display = ["", "Brak ulic w TERYT dla tej miejscowości"]
-# W przeciwnym razie (brak SIMC/TERC lub brak połączenia), zostaje tylko [""]
 
 # Ustalenie indeksu dla selectboxa
 try:
-    current_street_index = street_options_display.index(st.session_state._selected_street_name)
+    if street_options_display: # Upewnij się, że lista nie jest pusta
+        current_street_index = street_options_display.index(st.session_state._selected_street_name)
+    else:
+         current_street_index = 0
 except ValueError:
     current_street_index = 0 # Domyślnie puste
 
@@ -811,7 +824,7 @@ st.session_state._selected_street_name = st.selectbox(
     options=street_options_display,
     key="street_selector_widget",
     index=current_street_index,
-    # Wyłącz, jeśli nie ma ulic do wyboru (tylko pusta opcja lub komunikat o braku)
+    # Wyłącz, jeśli nie ma ulic do wyboru
     disabled=(len(street_options_display) <= 1 or (len(street_options_display) == 2 and street_options_display[1].startswith("Brak ulic")))
 )
 selected_street_name = st.session_state._selected_street_name
@@ -819,7 +832,7 @@ selected_street_name = st.session_state._selected_street_name
 # --- Wyświetlanie symbolu ulicy ---
 selected_street_symbol = None
 selected_street_id = None
-# Sprawdź, czy wybrano poprawną nazwę ulicy (nie pustą i nie komunikat)
+# Sprawdź, czy wybrano poprawną nazwę ulicy
 valid_street_selected = selected_street_name and not selected_street_name.startswith("Brak ulic")
 
 if valid_street_selected and teryt_streets_from_state:
@@ -880,12 +893,12 @@ if selected_locality:
 
 
     # Połącz części adresu w jeden tekst
-    final_address = "\n".join(address_parts)
-    st.text_area("Zebrane dane:", final_address, height=300) # Zwiększona wysokość
+    final_address = "\n".join(filter(None, address_parts)) # Usuń puste wpisy
+    st.text_area("Zebrane dane:", final_address, height=300)
 else:
     st.info("Wprowadź kod pocztowy i wybierz miejscowość, aby rozpocząć.")
 
 # --- Sekcja Debugowania (opcjonalna) ---
 # with st.expander("Informacje Debugowania Stanu Sesji"):
-#      st.json(st.session_state.to_dict())
+#      st.json({k: v for k, v in st.session_state.items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))})
 
