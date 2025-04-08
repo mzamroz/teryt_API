@@ -106,7 +106,7 @@ def enrich_ulic_data(ulic_df, simc_df):
 
 # --- Główna część aplikacji ---
 st.set_page_config(layout="wide") # Użyj szerszego layoutu
-st.title("Uteryterowana terytowarka v2.2 (z ULIC, fallback SIMC i wyszukiwaniem ulic)")
+st.title("Teryt GUI")
 
 # Ładowanie danych
 dataframes, loaded_files, terc_data, simc_data, ulic_data, load_errors, load_warnings = load_data(
