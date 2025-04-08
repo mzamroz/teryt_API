@@ -1,356 +1,396 @@
-import pandas as pd
-import streamlit as st
+# main.py
 import os
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query, Path
+# Dodaj List do importów
+from typing import List, Optional, Dict, Any
+import logging
+# Dodaj BaseModel z Pydantic dla lepszej definicji odpowiedzi
+from pydantic import BaseModel
 
 # --- Konfiguracja ---
-DATA_DIR = './dane' # Katalog z plikami CSV
-TERC_FILENAME = 'TERC_Adresowy_2025-04-08.csv'
-SIMC_FILENAME = 'SIMC_Adresowy_2025-04-08.csv'
-ULIC_FILENAME = 'ULIC_Adresowy_2025-04-08.csv'
-KODY_POCZTOWE_FILENAME = 'kody_pocztowe.csv'
+# (bez zmian)
+DATA_DIR = os.getenv('DATA_DIR', './dane')
+TERC_FILENAME = os.getenv('TERC_FILENAME', 'TERC_Adresowy_2025-04-08.csv')
+SIMC_FILENAME = os.getenv('SIMC_FILENAME', 'SIMC_Adresowy_2025-04-08.csv')
+ULIC_FILENAME = os.getenv('ULIC_FILENAME', 'ULIC_Adresowy_2025-04-08.csv')
+KODY_POCZTOWE_FILENAME = os.getenv('KODY_POCZTOWE_FILENAME', 'kody_pocztowe.csv')
 
-# Słownik przechowujący typy danych dla kluczowych kolumn (jako stringi, aby zachować wiodące zera)
 COLUMN_DTYPES = {
     'WOJ': str, 'POW': str, 'GMI': str, 'RODZ': str, 'RODZ_GMI': str,
     'SYM': str, 'SYM_UL': str, 'SYMPOD': str, 'PNA': str
 }
 
-# --- Ładowanie i przygotowanie danych ---
-# Funkcja do ładowania danych z cacheowaniem Streamlit
-@st.cache_data
-def load_data(data_dir, terc_filename, simc_filename, ulic_filename, kody_pocztowe_filename, column_dtypes):
-    """Ładuje pliki CSV do DataFrame'ów, obsługując różne kodowania i błędy."""
-    dataframes = {}
-    loaded_files = []
-    terc_data_local = None
-    simc_data_local = None
-    ulic_data_local = None
-    errors = []
-    warnings = []
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    if not os.path.exists(data_dir):
-        errors.append(f"Katalog '{data_dir}' nie istnieje.")
-        return dataframes, loaded_files, terc_data_local, simc_data_local, ulic_data_local, errors, warnings
+dataframes: Dict[str, pd.DataFrame] = {}
+terc_data: Optional[pd.DataFrame] = None
+simc_data: Optional[pd.DataFrame] = None
+ulic_data: Optional[pd.DataFrame] = None
+ulic_data_enriched: Optional[pd.DataFrame] = None
+kody_pocztowe_data: Optional[pd.DataFrame] = None
 
-    all_files = os.listdir(data_dir)
-    # warnings.append(f"Znaleziono pliki w katalogu '{data_dir}': {', '.join(all_files)}") # Mniej istotna informacja
+# --- Funkcje pomocnicze ---
+# (bez zmian - load_data_on_startup, enrich_ulic_data, get_terc_codes, get_simc_code, get_ulic_data)
+# ... (cała reszta funkcji pomocniczych jak poprzednio) ...
 
-    required_files = [terc_filename, simc_filename, ulic_filename, kody_pocztowe_filename]
+def load_data_on_startup():
+    """Ładuje pliki CSV do globalnych DataFrame'ów przy starcie aplikacji."""
+    global dataframes, terc_data, simc_data, ulic_data, kody_pocztowe_data, ulic_data_enriched
+    logger.info(f"Rozpoczynanie ładowania danych z katalogu: {DATA_DIR}")
+
+    if not os.path.exists(DATA_DIR):
+        logger.error(f"Katalog '{DATA_DIR}' nie istnieje. Nie można załadować danych.")
+        return
+
+    all_files = os.listdir(DATA_DIR)
+    required_files = [TERC_FILENAME, SIMC_FILENAME, ULIC_FILENAME, KODY_POCZTOWE_FILENAME]
     missing_files = [f for f in required_files if f not in all_files]
 
     if missing_files:
-        errors.append(f"Brak wymaganych plików w katalogu '{data_dir}': {', '.join(missing_files)}")
+        logger.warning(f"Brak wymaganych plików w katalogu '{DATA_DIR}': {', '.join(missing_files)}")
 
-    for file_name in all_files:
-        if file_name.endswith('.csv'):
-            file_path = os.path.join(data_dir, file_name)
+    loaded_files_count = 0
+    for file_name in required_files:
+        if file_name in all_files:
+            file_path = os.path.join(DATA_DIR, file_name)
             df = None
             try:
                 df = pd.read_csv(
                     file_path, delimiter=';', on_bad_lines='warn', encoding='utf-8',
-                    dtype=column_dtypes, low_memory=False
+                    dtype=COLUMN_DTYPES, low_memory=False
                 )
-                # warnings.append(f"Załadowano {file_name} (UTF-8).")
+                logger.info(f"Załadowano {file_name} (UTF-8).")
             except UnicodeDecodeError:
                 try:
                     df = pd.read_csv(
                         file_path, delimiter=';', on_bad_lines='warn', encoding='latin1',
-                        dtype=column_dtypes, low_memory=False
+                        dtype=COLUMN_DTYPES, low_memory=False
                     )
-                    warnings.append(f"Plik {file_name} załadowano używając kodowania 'latin1' zamiast 'utf-8'.")
+                    logger.warning(f"Plik {file_name} załadowano używając kodowania 'latin1' zamiast 'utf-8'.")
                 except Exception as e_inner:
-                    errors.append(f"Nie udało się załadować {file_name} ani z UTF-8, ani z Latin-1: {e_inner}")
+                    logger.error(f"Nie udało się załadować {file_name} ani z UTF-8, ani z Latin-1: {e_inner}")
                     continue
             except pd.errors.ParserError as e_parser:
-                 errors.append(f"Błąd parsowania {file_name}: {e_parser}. Sprawdź strukturę pliku i separator.")
-                 continue
+                logger.error(f"Błąd parsowania {file_name}: {e_parser}. Sprawdź strukturę pliku i separator.")
+                continue
             except Exception as e_outer:
-                errors.append(f"Nieoczekiwany błąd podczas ładowania {file_name}: {e_outer}")
+                logger.error(f"Nieoczekiwany błąd podczas ładowania {file_name}: {e_outer}")
                 continue
 
             if df is not None:
                 df.columns = df.columns.str.strip()
                 dataframes[file_name] = df
-                loaded_files.append(file_name)
-                if file_name == terc_filename: terc_data_local = df
-                elif file_name == simc_filename: simc_data_local = df
-                elif file_name == ulic_filename: ulic_data_local = df
+                loaded_files_count += 1
+                if file_name == TERC_FILENAME: terc_data = df
+                elif file_name == SIMC_FILENAME: simc_data = df
+                elif file_name == ULIC_FILENAME: ulic_data = df
+                elif file_name == KODY_POCZTOWE_FILENAME: kody_pocztowe_data = df
+        else:
+             logger.warning(f"Plik {file_name} nie został znaleziony w {DATA_DIR}.")
 
-    return dataframes, loaded_files, terc_data_local, simc_data_local, ulic_data_local, errors, warnings
 
-# Funkcja do wzbogacania danych ULIC (cacheowana)
-@st.cache_data
+    logger.info(f"Zakończono ładowanie danych. Załadowano {loaded_files_count} z {len(required_files)} wymaganych plików.")
+
+    if ulic_data is not None and simc_data is not None:
+        ulic_data_enriched = enrich_ulic_data(ulic_data, simc_data)
+        if ulic_data_enriched is not None:
+             logger.info("Pomyślnie wzbogacono dane ULIC o nazwy miejscowości.")
+        else:
+             logger.warning("Nie udało się wzbogacić danych ULIC.")
+    else:
+        logger.warning("Nie można wzbogacić danych ULIC, ponieważ brakuje danych ULIC lub SIMC.")
+
+    if kody_pocztowe_data is not None:
+         try:
+            if 'PNA' in kody_pocztowe_data.columns:
+                 kody_pocztowe_data['PNA'] = kody_pocztowe_data['PNA'].astype(str)
+            else:
+                 logger.error(f"Brak kolumny 'PNA' w pliku {KODY_POCZTOWE_FILENAME}")
+                 kody_pocztowe_data = None
+
+            if 'MIEJSCOWOŚĆ' in kody_pocztowe_data.columns:
+                # Stworzenie 'MIEJSCOWOŚĆ_CLEAN' - kluczowe dla nowego endpointu
+                kody_pocztowe_data['MIEJSCOWOŚĆ_CLEAN'] = kody_pocztowe_data['MIEJSCOWOŚĆ'].str.extract(r'\((.*?)\)', expand=False).fillna(kody_pocztowe_data['MIEJSCOWOŚĆ']).str.strip()
+            else:
+                 logger.error(f"Brak kolumny 'MIEJSCOWOŚĆ' w pliku {KODY_POCZTOWE_FILENAME}")
+                 kody_pocztowe_data = None
+
+            logger.info("Przygotowano dane kodów pocztowych.")
+
+         except Exception as e:
+            logger.error(f"Błąd podczas przygotowywania danych kodów pocztowych: {e}")
+            kody_pocztowe_data = None
+
+# ... (reszta funkcji pomocniczych: enrich_ulic_data, get_terc_codes, etc.) ...
 def enrich_ulic_data(ulic_df, simc_df):
-    """ обогащает данные ULIC названиями населенных пунктов из SIMC."""
+    """Wzbogaca dane ULIC nazwami miejscowości z SIMC."""
     if ulic_df is None or simc_df is None:
+        logger.warning("Próba wzbogacenia ULIC, ale brakuje danych wejściowych.")
+        return None
+    try:
+        simc_to_merge = simc_df[['WOJ', 'POW', 'GMI', 'RODZ_GMI', 'SYM', 'NAZWA']].copy()
+        simc_to_merge.rename(columns={'NAZWA': 'NAZWA_MIEJSCOWOSCI'}, inplace=True)
+        ulic_enriched = ulic_df.copy()
+        nazwa1_col = 'NAZWA_1' if 'NAZWA_1' in ulic_enriched.columns else None
+        nazwa2_col = 'NAZWA_2' if 'NAZWA_2' in ulic_enriched.columns else None
+        if nazwa1_col and nazwa2_col:
+             ulic_enriched['NAZWA_ULICY_FULL'] = ulic_enriched[nazwa1_col].fillna('') + ' ' + ulic_enriched[nazwa2_col].fillna('')
+             ulic_enriched['NAZWA_ULICY_FULL'] = ulic_enriched['NAZWA_ULICY_FULL'].str.strip()
+        elif nazwa1_col:
+             ulic_enriched['NAZWA_ULICY_FULL'] = ulic_enriched[nazwa1_col].fillna('').str.strip()
+             logger.warning("Brak kolumny 'NAZWA_2' w danych ULIC. Użyto tylko 'NAZWA_1'.")
+        else:
+             logger.error("Brak kolumny 'NAZWA_1' (i być może 'NAZWA_2') w danych ULIC. Nie można utworzyć pełnej nazwy ulicy.")
+             return ulic_df
+        merge_cols = ['WOJ', 'POW', 'GMI', 'RODZ_GMI', 'SYM']
+        if all(col in ulic_enriched.columns for col in merge_cols) and \
+           all(col in simc_to_merge.columns for col in merge_cols):
+            ulic_enriched = pd.merge(
+                ulic_enriched,
+                simc_to_merge,
+                on=merge_cols,
+                how='left'
+            )
+            return ulic_enriched
+        else:
+            missing_ulic = [col for col in merge_cols if col not in ulic_enriched.columns]
+            missing_simc = [col for col in merge_cols if col not in simc_to_merge.columns]
+            logger.error(f"Nie można połączyć ULIC i SIMC. Brakujące kolumny w ULIC: {missing_ulic}, w SIMC: {missing_simc}")
+            return ulic_df
+    except Exception as e:
+        logger.error(f"Błąd podczas wzbogacania danych ULIC: {e}")
         return None
 
-    # Przygotuj SIMC do merge'a - wybierz potrzebne kolumny i zmień nazwę 'NAZWA'
-    simc_to_merge = simc_df[['WOJ', 'POW', 'GMI', 'RODZ_GMI', 'SYM', 'NAZWA']].copy()
-    simc_to_merge.rename(columns={'NAZWA': 'NAZWA_MIEJSCOWOSCI'}, inplace=True)
+def get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, miejscowosc_nazwa):
+    """Wyszukuje kody TERC dla województwa, powiatu i gminy."""
+    if terc_data is None:
+        return None, None, None
+    terc_woj, terc_pow, terc_gmi = None, None, None
+    woj_code, pow_code = None, None
+    try:
+        if woj_nazwa:
+            woj_row = terc_data[terc_data['NAZWA'].str.lower() == woj_nazwa.lower()]
+            if not woj_row.empty:
+                woj_code = woj_row['WOJ'].iloc[0]
+                terc_woj = woj_code
+            else: logger.warning(f"Nie znaleziono TERC WOJ dla: {woj_nazwa}")
+        if woj_code and pow_nazwa:
+            pow_row = terc_data[(terc_data['NAZWA'].str.lower() == pow_nazwa.lower()) & (terc_data['WOJ'] == woj_code) & (terc_data['POW'].notna()) & (terc_data['GMI'].isna())]
+            if not pow_row.empty:
+                pow_code = pow_row['POW'].iloc[0]
+                terc_pow = f"{woj_code}{pow_code}"
+            else: logger.warning(f"Nie znaleziono TERC POW dla: {pow_nazwa} w woj. {woj_nazwa}")
+        if woj_code and pow_code and gmi_nazwa:
+             gmi_row = terc_data[((terc_data['NAZWA'].str.lower() == gmi_nazwa.lower()) | (terc_data['NAZWA'].str.lower() == miejscowosc_nazwa.lower())) & (terc_data['WOJ'] == woj_code) & (terc_data['POW'] == pow_code) & (terc_data['GMI'].notna()) & (terc_data['RODZ'].notna())]
+             if not gmi_row.empty:
+                 if len(gmi_row) > 1: logger.info(f"Znaleziono wiele TERC GMI dla '{gmi_nazwa}'/'{miejscowosc_nazwa}'. Wybieram pierwszy.")
+                 gmi_data = gmi_row.iloc[0]
+                 terc_gmi = f"{gmi_data['WOJ']}{gmi_data['POW']}{gmi_data['GMI']}{gmi_data['RODZ']}"
+             else: logger.warning(f"Nie znaleziono TERC GMI dla gminy: {gmi_nazwa} lub miejscowości: {miejscowosc_nazwa} w pow. {pow_nazwa}")
+    except Exception as e:
+        logger.error(f"Błąd podczas wyszukiwania kodów TERC: {e}")
+        return None, None, None
+    return terc_woj, terc_pow, terc_gmi
 
-    # Połącz NAZWA_1 i NAZWA_2 w ULIC
-    ulic_enriched = ulic_df.copy()
-    ulic_enriched['NAZWA_ULICY_FULL'] = ulic_enriched['NAZWA_1'].fillna('') + ' ' + ulic_enriched['NAZWA_2'].fillna('')
-    ulic_enriched['NAZWA_ULICY_FULL'] = ulic_enriched['NAZWA_ULICY_FULL'].str.strip()
+def get_simc_code(terc_gmi_full, miejscowosc_nazwa, gmina_nazwa):
+    """Wyszukuje kod SIMC dla danej gminy i miejscowości (z fallbackiem na nazwę gminy)."""
+    if simc_data is None or not terc_gmi_full or len(terc_gmi_full) != 7:
+        logger.warning("Nie można wyszukać SIMC: brak danych SIMC lub nieprawidłowy TERC gminy.")
+        return None, None
+    woj, pow, gmi, rodz_gmi = terc_gmi_full[:2], terc_gmi_full[2:4], terc_gmi_full[4:6], terc_gmi_full[6]
+    sym_code, found_name = None, None
+    try:
+        matching_simc = simc_data[(simc_data['WOJ'] == woj) & (simc_data['POW'] == pow) & (simc_data['GMI'] == gmi) & (simc_data['RODZ_GMI'] == rodz_gmi) & (simc_data['NAZWA'].str.strip().str.lower() == miejscowosc_nazwa.strip().lower())]
+        if not matching_simc.empty:
+            if len(matching_simc) > 1: logger.info(f"Znaleziono wiele SIMC dla miejscowości '{miejscowosc_nazwa}'. Wybieram pierwszy.")
+            simc_details = matching_simc.iloc[0]
+            sym_code = simc_details['SYM']
+            found_name = simc_details['NAZWA']
+            logger.info(f"Znaleziono SIMC dla miejscowości '{miejscowosc_nazwa}': {sym_code}")
+            return sym_code, found_name
+        else:
+            logger.info(f"Nie znaleziono SIMC dla '{miejscowosc_nazwa}'. Próba dla nazwy gminy '{gmina_nazwa}'...")
+            matching_simc_fallback = simc_data[(simc_data['WOJ'] == woj) & (simc_data['POW'] == pow) & (simc_data['GMI'] == gmi) & (simc_data['RODZ_GMI'] == rodz_gmi) & (simc_data['NAZWA'].str.strip().str.lower() == gmina_nazwa.strip().lower())]
+            if not matching_simc_fallback.empty:
+                if len(matching_simc_fallback) > 1: logger.info(f"Znaleziono wiele SIMC dla nazwy gminy '{gmina_nazwa}'. Wybieram pierwszy.")
+                simc_details_fallback = matching_simc_fallback.iloc[0]
+                sym_code = simc_details_fallback['SYM']
+                found_name = simc_details_fallback['NAZWA']
+                logger.info(f"Znaleziono SIMC dla nazwy gminy '{gmina_nazwa}' (fallback): {sym_code}")
+                return sym_code, found_name
+            else:
+                logger.warning(f"Nie znaleziono SIMC ani dla miejscowości '{miejscowosc_nazwa}', ani dla nazwy gminy '{gmina_nazwa}' (TERC GMI: {terc_gmi_full})")
+                return None, None
+    except Exception as e:
+        logger.error(f"Błąd podczas wyszukiwania kodu SIMC: {e}")
+        return None, None
 
-    # Złącz ULIC z SIMC
-    ulic_enriched = pd.merge(
-        ulic_enriched,
-        simc_to_merge,
-        on=['WOJ', 'POW', 'GMI', 'RODZ_GMI', 'SYM'],
-        how='left' # Zachowaj wszystkie ulice, nawet jeśli nie znajdą dopasowania w SIMC
-    )
-    return ulic_enriched
+def get_ulic_data(terc_gmi_full, simc_code):
+    """Wyszukuje dane ULIC dla danego kodu TERC gminy i kodu SIMC."""
+    if ulic_data_enriched is None or not terc_gmi_full or len(terc_gmi_full) != 7 or not simc_code:
+         logger.warning("Nie można wyszukać ULIC: brak wzbogaconych danych ULIC, nieprawidłowy TERC gminy lub brak kodu SIMC.")
+         return pd.DataFrame()
+    woj, pow, gmi, rodz_gmi = terc_gmi_full[:2], terc_gmi_full[2:4], terc_gmi_full[4:6], terc_gmi_full[6]
+    try:
+        matching_ulic = ulic_data_enriched[(ulic_data_enriched['WOJ'] == woj) & (ulic_data_enriched['POW'] == pow) & (ulic_data_enriched['GMI'] == gmi) & (ulic_data_enriched['RODZ_GMI'] == rodz_gmi) & (ulic_data_enriched['SYM'] == simc_code)].copy()
+        if not matching_ulic.empty:
+            logger.info(f"Znaleziono {len(matching_ulic)} ulic dla SIMC: {simc_code}")
+            result_df = matching_ulic[['SYM_UL', 'CECHA', 'NAZWA_ULICY_FULL', 'STAN_NA']].rename(columns={'NAZWA_ULICY_FULL': 'NAZWA_ULICY', 'SYM_UL': 'ULIC_CODE'})
+            return result_df
+        else:
+            logger.warning(f"Nie znaleziono kodów ULIC dla SIMC: {simc_code} (TERC GMI: {terc_gmi_full}).")
+            return pd.DataFrame()
+    except KeyError as e:
+        logger.error(f"Błąd klucza podczas wyszukiwania ULIC (brakująca kolumna?): {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Błąd podczas wyszukiwania danych ULIC: {e}")
+        return pd.DataFrame()
 
 
-# --- Główna część aplikacji ---
-st.set_page_config(layout="wide") # Użyj szerszego layoutu
-st.title("Uteryterowana terytowarka v2.2 (z ULIC, fallback SIMC i wyszukiwaniem ulic)")
+# --- Pydantic Models (dla definicji odpowiedzi) ---
+class MiejscowosciResponse(BaseModel):
+    postal_code: str
+    miejscowosci: List[str]
 
-# Ładowanie danych
-dataframes, loaded_files, terc_data, simc_data, ulic_data, load_errors, load_warnings = load_data(
-    DATA_DIR, TERC_FILENAME, SIMC_FILENAME, ULIC_FILENAME, KODY_POCZTOWE_FILENAME, COLUMN_DTYPES
+# --- Inicjalizacja FastAPI ---
+app = FastAPI(
+    title="API TERYT - Uteryterowana Terytowarka",
+    description="API do wyszukiwania informacji adresowych na podstawie kodów pocztowych i danych TERYT.",
+    version="1.1.0" # Zwiększono wersję
 )
 
-# Wyświetl błędy i ostrzeżenia ładowania
-for warning in load_warnings:
-    st.info(warning)
-for error in load_errors:
-    st.error(error)
+# --- Event handler - ładowanie danych przy starcie ---
+@app.on_event("startup")
+async def startup_event():
+    load_data_on_startup()
 
-# Sprawdzenie, czy kluczowe dane zostały załadowane
-if terc_data is None or simc_data is None or ulic_data is None or KODY_POCZTOWE_FILENAME not in dataframes:
-    st.error("Nie udało się załadować wszystkich wymaganych plików danych (TERC, SIMC, ULIC, Kody Pocztowe). Aplikacja nie może kontynuować.")
-    st.stop()
-else:
-    st.success("Wszystkie wymagane pliki danych zostały pomyślnie załadowane.")
+# --- Endpointy API ---
 
-# Wzbogacanie danych ULIC (wykonywane raz dzięki cache)
-ulic_data_enriched = enrich_ulic_data(ulic_data, simc_data)
-if ulic_data_enriched is None:
-     st.error("Nie udało się wzbogacić danych ULIC o nazwy miejscowości.")
-     # Można kontynuować bez wzbogaconych danych, ale wyszukiwanie ulic będzie mniej użyteczne
-     # st.stop()
+@app.get("/health", summary="Sprawdza stan API", tags=["Status"])
+async def health_check():
+    """Zwraca status OK, jeśli API działa."""
+    data_loaded = all(df is not None for df in [terc_data, simc_data, ulic_data_enriched, kody_pocztowe_data])
+    return {"status": "OK", "data_loaded": data_loaded}
 
+# --- NOWY ENDPOINT ---
+@app.get(
+    "/miejscowosci/{postal_code}",
+    summary="Zwraca listę miejscowości dla podanego kodu pocztowego",
+    tags=["Wyszukiwanie"],
+    response_model=MiejscowosciResponse # Użycie modelu Pydantic
+)
+async def get_miejscowosci_by_postal_code(
+    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", regex=r"^\d{2}-\d{3}$")
+):
+    """
+    Na podstawie kodu pocztowego zwraca posortowaną listę unikalnych nazw miejscowości,
+    które są przypisane do tego kodu w pliku kodów pocztowych.
+    """
+    if kody_pocztowe_data is None:
+        logger.error(f"Zapytanie o miejscowości dla {postal_code}, ale dane kodów pocztowych nie są załadowane.")
+        raise HTTPException(status_code=503, detail="Dane kodów pocztowych nie są załadowane. Spróbuj ponownie później.")
 
-# --- Logika aplikacji ---
-
-# Inicjalizacja zmiennych stanu sesji
-if 'miejscowosc' not in st.session_state: st.session_state.miejscowosc = None
-if 'wojewodztwo' not in st.session_state: st.session_state.wojewodztwo = None
-if 'powiat' not in st.session_state: st.session_state.powiat = None
-if 'gmina' not in st.session_state: st.session_state.gmina = None
-if 'ulica_z_kodu' not in st.session_state: st.session_state.ulica_z_kodu = None
-if 'numery_z_kodu' not in st.session_state: st.session_state.numery_z_kodu = None
-if 'terc_woj' not in st.session_state: st.session_state.terc_woj = None
-if 'terc_powiat' not in st.session_state: st.session_state.terc_powiat = None
-if 'terc_gmina' not in st.session_state: st.session_state.terc_gmina = None
-if 'sym_code' not in st.session_state: st.session_state.sym_code = None
-if 'matching_ulic_df' not in st.session_state: st.session_state.matching_ulic_df = pd.DataFrame()
-if 'last_kod_pocztowy' not in st.session_state: st.session_state.last_kod_pocztowy = ""
-if 'street_search_query' not in st.session_state: st.session_state.street_search_query = ""
+    # Upewnij się, że kolumna MIEJSCOWOŚĆ_CLEAN istnieje
+    if 'MIEJSCOWOŚĆ_CLEAN' not in kody_pocztowe_data.columns:
+        logger.error(f"Brak wymaganej kolumny 'MIEJSCOWOŚĆ_CLEAN' w danych kodów pocztowych.")
+        raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera: Brak przetworzonej kolumny miejscowości.")
 
 
-# Podział na kolumny dla lepszego układu
-col1, col2 = st.columns(2)
+    postal_code = postal_code.strip()
+    # Filtruj dane kodów pocztowych
+    pasujace_df = kody_pocztowe_data[kody_pocztowe_data['PNA'] == postal_code]
+
+    if pasujace_df.empty:
+        logger.info(f"Nie znaleziono miejscowości dla kodu pocztowego: {postal_code}")
+        raise HTTPException(status_code=404, detail=f"Nie znaleziono miejscowości dla kodu pocztowego: {postal_code}")
+
+    # Wyodrębnij unikalne, posortowane nazwy miejscowości
+    # Używamy MIEJSCOWOŚĆ_CLEAN, która została przygotowana w load_data_on_startup
+    lista_miejscowosci = sorted(pasujace_df['MIEJSCOWOŚĆ_CLEAN'].unique())
+
+    logger.info(f"Znaleziono {len(lista_miejscowosci)} miejscowości dla kodu {postal_code}: {', '.join(lista_miejscowosci)}")
+
+    # Zwróć wynik zgodnie z modelem Pydantic
+    return MiejscowosciResponse(postal_code=postal_code, miejscowosci=lista_miejscowosci)
 
 
-# Sekcja kodu pocztowego
-st.header("Wyszukiwanie po kodzie pocztowym")
-kod_pocztowy = st.text_input("Wprowadź kod pocztowy (np. 00-001):", key="kod_pocztowy_input", value=st.session_state.last_kod_pocztowy)
+@app.get(
+    "/lookup/postal_code/{postal_code}",
+    summary="Wyszukuje szczegółowe informacje adresowe dla kodu pocztowego",
+    tags=["Wyszukiwanie"],
+    response_model=Dict[str, Any]
+)
+async def lookup_postal_code(
+    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", regex=r"^\d{2}-\d{3}$"),
+    miejscowosc: Optional[str] = Query(None, description="Opcjonalnie: Nazwa miejscowości do zawężenia wyników (jeśli kod pocztowy obejmuje wiele miejscowości)")
+):
+    """
+    Na podstawie kodu pocztowego zwraca listę pasujących miejscowości lub,
+    jeśli podano miejscowość, zwraca szczegółowe dane TERYT (TERC, SIMC, ULIC)
+    dla tej kombinacji kodu i miejscowości.
+    """
+    if kody_pocztowe_data is None:
+        raise HTTPException(status_code=503, detail="Dane kodów pocztowych nie są załadowane.")
+    if 'MIEJSCOWOŚĆ_CLEAN' not in kody_pocztowe_data.columns:
+         raise HTTPException(status_code=500, detail="Wewnętrzny błąd serwera: Brak przetworzonej kolumny miejscowości.")
 
-# Resetowanie stanu jeśli wprowadzono nowy kod pocztowy
-if kod_pocztowy != st.session_state.last_kod_pocztowy:
-    # Resetuj stan, gdy kod pocztowy się zmienia
-    st.session_state.miejscowosc = None
-    st.session_state.wojewodztwo = None
-    st.session_state.powiat = None
-    st.session_state.gmina = None
-    st.session_state.ulica_z_kodu = None
-    st.session_state.numery_z_kodu = None
-    st.session_state.terc_woj = None
-    st.session_state.terc_powiat = None
-    st.session_state.terc_gmina = None
-    st.session_state.sym_code = None
-    st.session_state.matching_ulic_df = pd.DataFrame()
-    st.session_state.last_kod_pocztowy = kod_pocztowy
-    # st.experimental_rerun() # Wymuś przeładowanie, aby selectbox się zaktualizował poprawnie
+    postal_code = postal_code.strip()
+    pasujace_miejscowosci_df = kody_pocztowe_data[kody_pocztowe_data['PNA'] == postal_code]
 
-if kod_pocztowy:
-    df_kody_pocztowe = dataframes[KODY_POCZTOWE_FILENAME]
-    df_kody_pocztowe['PNA'] = df_kody_pocztowe['PNA'].astype(str)
-    df_kody_pocztowe['MIEJSCOWOŚĆ_CLEAN'] = df_kody_pocztowe['MIEJSCOWOŚĆ'].str.extract(r'\((.*?)\)', expand=False).fillna(df_kody_pocztowe['MIEJSCOWOŚĆ'])
-    pasujace_miejscowosci_df = df_kody_pocztowe[df_kody_pocztowe['PNA'] == kod_pocztowy]
+    if pasujace_miejscowosci_df.empty:
+        raise HTTPException(status_code=404, detail=f"Nie znaleziono miejscowości dla kodu pocztowego: {postal_code}")
 
-    if not pasujace_miejscowosci_df.empty:
-        lista_miejscowosci = sorted(pasujace_miejscowosci_df['MIEJSCOWOŚĆ_CLEAN'].unique())
+    lista_miejscowosci = sorted(pasujace_miejscowosci_df['MIEJSCOWOŚĆ_CLEAN'].unique())
 
-        selected_miejscowosc_index = 0
-        if len(lista_miejscowosci) > 1:
-            options = [""] + lista_miejscowosci
-            try:
-                current_selection_index = options.index(st.session_state.miejscowosc) if st.session_state.miejscowosc in options else 0
-            except ValueError: current_selection_index = 0
-            selected_miejscowosc = st.selectbox("Wybierz miejscowość:", options, index=current_selection_index, key="sel_miejscowosc")
-            if selected_miejscowosc: st.session_state.miejscowosc = selected_miejscowosc
-            else: st.session_state.miejscowosc = None # Reset jeśli wybrano pustą opcję
+    if not miejscowosc and len(lista_miejscowosci) > 1:
+        return {
+            "postal_code": postal_code,
+            "message": "Podany kod pocztowy obejmuje wiele miejscowości. Użyj endpointu /miejscowosci/{postal_code} aby zobaczyć listę lub podaj parametr 'miejscowosc' w tym zapytaniu, aby uzyskać szczegóły.",
+            "available_miejscowosci": lista_miejscowosci # Zwracamy listę dla informacji
+        }
 
-        elif len(lista_miejscowosci) == 1:
-            if st.session_state.miejscowosc != lista_miejscowosci[0]: # Ustaw tylko jeśli się zmieniło
-                st.session_state.miejscowosc = lista_miejscowosci[0]
-                # st.experimental_rerun() # Może być potrzebne do odświeżenia
-            st.write(f"Automatycznie wybrano miejscowość: **{st.session_state.miejscowosc}**")
-        else:
-                st.warning("Nie znaleziono unikalnych nazw miejscowości dla podanego kodu pocztowego.")
-                st.session_state.miejscowosc = None
-
-        # Przetwarzaj tylko jeśli miejscowość jest wybrana
-        if st.session_state.miejscowosc:
-            dane_miejscowosci = pasujace_miejscowosci_df[pasujace_miejscowosci_df['MIEJSCOWOŚĆ_CLEAN'] == st.session_state.miejscowosc].iloc[0]
-            # Aktualizuj stan tylko jeśli wartości się zmieniły
-            if st.session_state.wojewodztwo != dane_miejscowosci['WOJEWÓDZTWO']: st.session_state.wojewodztwo = dane_miejscowosci['WOJEWÓDZTWO']
-            if st.session_state.powiat != dane_miejscowosci['POWIAT']: st.session_state.powiat = dane_miejscowosci['POWIAT']
-            if st.session_state.gmina != dane_miejscowosci['GMINA']: st.session_state.gmina = dane_miejscowosci['GMINA']
-            ulica_new = dane_miejscowosci['ULICA'] if pd.notna(dane_miejscowosci['ULICA']) else None
-            numery_new = dane_miejscowosci['NUMERY'] if pd.notna(dane_miejscowosci['NUMERY']) else None
-            if st.session_state.ulica_z_kodu != ulica_new: st.session_state.ulica_z_kodu = ulica_new
-            if st.session_state.numery_z_kodu != numery_new: st.session_state.numery_z_kodu = numery_new
-
-            # --- Wyszukiwanie kodów TERC ---
-            with st.expander("Dane TERYT (TERC)", expanded=False): # Domyślnie zwinięte
-                # Województwo
-                terc_woj_new = None
-                if st.session_state.wojewodztwo:
-                    woj_row = terc_data[terc_data['NAZWA'].str.lower() == st.session_state.wojewodztwo.lower()]
-                    if not woj_row.empty:
-                        terc_woj_new = woj_row['WOJ'].iloc[0]
-                        st.write(f"**Województwo:** {st.session_state.wojewodztwo} (TERC WOJ: {terc_woj_new})")
-                    else:
-                        st.warning(f"Nie znaleziono kodu TERC dla województwa: {st.session_state.wojewodztwo}")
-                if st.session_state.terc_woj != terc_woj_new: st.session_state.terc_woj = terc_woj_new
-
-                # Powiat
-                terc_powiat_new = None
-                if st.session_state.terc_woj and st.session_state.powiat:
-                    pow_row = terc_data[(terc_data['NAZWA'].str.lower() == st.session_state.powiat.lower()) & (terc_data['WOJ'] == st.session_state.terc_woj) & (terc_data['POW'].notna()) & (terc_data['GMI'].isna())]
-                    if not pow_row.empty:
-                        terc_powiat_new = f"{pow_row['WOJ'].iloc[0]}{pow_row['POW'].iloc[0]}"
-                        st.write(f"**Powiat:** {st.session_state.powiat} (TERC POW: {terc_powiat_new})")
-                    else:
-                        st.warning(f"Nie znaleziono kodu TERC dla powiatu: {st.session_state.powiat} w woj. {st.session_state.wojewodztwo}")
-                if st.session_state.terc_powiat != terc_powiat_new: st.session_state.terc_powiat = terc_powiat_new
-
-                # Gmina
-                terc_gmina_new = None
-                if st.session_state.terc_powiat and st.session_state.gmina:
-                    woj_code = st.session_state.terc_powiat[:2]; pow_code = st.session_state.terc_powiat[2:]
-                    gmi_row = terc_data[((terc_data['NAZWA'].str.lower() == st.session_state.gmina.lower()) | (terc_data['NAZWA'].str.lower() == st.session_state.miejscowosc.lower())) & (terc_data['WOJ'] == woj_code) & (terc_data['POW'] == pow_code) & (terc_data['GMI'].notna()) & (terc_data['RODZ'].notna())]
-                    if not gmi_row.empty:
-                        if len(gmi_row) > 1: st.info(f"Znaleziono wiele pasujących gmin dla '{st.session_state.gmina}'/'{st.session_state.miejscowosc}'. Wybieram pierwszą.")
-                        gmi_data = gmi_row.iloc[0]
-                        terc_gmina_new = f"{gmi_data['WOJ']}{gmi_data['POW']}{gmi_data['GMI']}{gmi_data['RODZ']}"
-                        st.write(f"**Gmina:** {st.session_state.gmina} (TERC GMI: {terc_gmina_new})")
-                    else:
-                        st.warning(f"Nie znaleziono kodu TERC dla gminy: {st.session_state.gmina} lub miejscowości: {st.session_state.miejscowosc} w pow. {st.session_state.powiat}")
-                if st.session_state.terc_gmina != terc_gmina_new: st.session_state.terc_gmina = terc_gmina_new
-
-
-    else: # if not pasujace_miejscowosci_df.empty:
-        st.warning("Nie znaleziono miejscowości dla podanego kodu pocztowego.")
-        if st.session_state.miejscowosc is not None: # Resetuj tylko jeśli coś było wybrane
-            st.session_state.miejscowosc = None; st.session_state.terc_gmina = None; st.session_state.sym_code = None
-            # st.experimental_rerun()
-
-
-# --- Wyszukiwanie kodu SIMC (z fallbackiem) ---
-if st.session_state.terc_gmina and st.session_state.miejscowosc:
-    with st.expander("Dane TERYT (SIMC)", expanded=False): # Domyślnie zwinięte
-        woj = st.session_state.terc_gmina[:2]; pow = st.session_state.terc_gmina[2:4]; gmi = st.session_state.terc_gmina[4:6]; rodz_gmi = st.session_state.terc_gmina[6]
-        simc_found = False
-        sym_code_new = None
-
-        # Krok 1: Wyszukaj po miejscowości
-        matching_simc = simc_data[(simc_data['WOJ'] == woj) & (simc_data['POW'] == pow) & (simc_data['GMI'] == gmi) & (simc_data['RODZ_GMI'] == rodz_gmi) & (simc_data['NAZWA'].str.strip().str.lower() == st.session_state.miejscowosc.strip().lower())]
-        if not matching_simc.empty:
-            if len(matching_simc) > 1: st.info(f"Znaleziono wiele wpisów SIMC dla miejscowości '{st.session_state.miejscowosc}'. Wyświetlam pierwszy.")
-            simc_details = matching_simc.iloc[0]
-            sym_code_new = simc_details['SYM']
-            st.success(f"Znaleziono kod SIMC (SYM) dla miejscowości **{st.session_state.miejscowosc}**: **{sym_code_new}**")
-            st.dataframe(matching_simc[['SYM', 'SYMPOD', 'NAZWA', 'RM', 'MZ', 'WOJ', 'POW', 'GMI', 'RODZ_GMI']])
-            simc_found = True
-        else:
-            # Krok 2: Fallback - Wyszukaj po nazwie gminy
-            st.info(f"Nie znaleziono SIMC dla '{st.session_state.miejscowosc}'. Próba dla nazwy gminy '{st.session_state.gmina}'...")
-            matching_simc_fallback = simc_data[(simc_data['WOJ'] == woj) & (simc_data['POW'] == pow) & (simc_data['GMI'] == gmi) & (simc_data['RODZ_GMI'] == rodz_gmi) & (simc_data['NAZWA'].str.strip().str.lower() == st.session_state.gmina.strip().lower())]
-            if not matching_simc_fallback.empty:
-                if len(matching_simc_fallback) > 1: st.info(f"Znaleziono wiele wpisów SIMC dla nazwy gminy '{st.session_state.gmina}'. Wyświetlam pierwszy.")
-                simc_details_fallback = matching_simc_fallback.iloc[0]
-                sym_code_new = simc_details_fallback['SYM']
-                st.success(f"Znaleziono kod SIMC (SYM) dla **nazwy gminy {st.session_state.gmina}**: **{sym_code_new}** (użyto jako fallback)")
-                st.dataframe(matching_simc_fallback[['SYM', 'SYMPOD', 'NAZWA', 'RM', 'MZ', 'WOJ', 'POW', 'GMI', 'RODZ_GMI']])
-                simc_found = True
-            else:
-                st.warning(f"Nie znaleziono kodu SIMC ani dla miejscowości '{st.session_state.miejscowosc}', ani dla nazwy gminy '{st.session_state.gmina}' z kodem TERC gminy {st.session_state.terc_gmina}")
-
-        if st.session_state.sym_code != sym_code_new:
-                st.session_state.sym_code = sym_code_new
-                # st.experimental_rerun() # Może być potrzebne do odświeżenia ULIC
-
-# --- Wyszukiwanie kodów ULIC (dla kodu pocztowego) ---
-if st.session_state.sym_code and st.session_state.terc_gmina:
-        with st.expander("Dane TERYT (ULIC) - dla wybranej miejscowości/gminy", expanded=False): # Domyślnie zwinięte
-            woj = st.session_state.terc_gmina[:2]; pow = st.session_state.terc_gmina[2:4]; gmi = st.session_state.terc_gmina[4:6]; rodz_gmi = st.session_state.terc_gmina[6]
-            matching_ulic = pd.DataFrame() # Domyślnie pusty
-            if ulic_data_enriched is not None:
-                    matching_ulic = ulic_data_enriched[
-                    (ulic_data_enriched['WOJ'] == woj) &
-                    (ulic_data_enriched['POW'] == pow) &
-                    (ulic_data_enriched['GMI'] == gmi) &
-                    (ulic_data_enriched['RODZ_GMI'] == rodz_gmi) &
-                    (ulic_data_enriched['SYM'] == st.session_state.sym_code)
-                ].copy()
-
-            if not matching_ulic.empty:
-                st.success(f"Znaleziono {len(matching_ulic)} ulic dla SIMC: {st.session_state.sym_code}:")
-                # Zapisz znalezione ulice w stanie sesji (tylko potrzebne kolumny)
-                st.session_state.matching_ulic_df = matching_ulic[['SYM_UL', 'CECHA', 'NAZWA_ULICY_FULL', 'STAN_NA']].rename(columns={'NAZWA_ULICY_FULL': 'NAZWA_ULICY'})
-                st.dataframe(st.session_state.matching_ulic_df)
-            else:
-                st.warning(f"Nie znaleziono kodów ULIC dla SIMC: {st.session_state.sym_code} w pliku {ULIC_FILENAME}.")
-                if not st.session_state.matching_ulic_df.empty: # Resetuj tylko jeśli coś tam było
-                        st.session_state.matching_ulic_df = pd.DataFrame()
-                        # st.experimental_rerun()
-
-# --- Wybór ulicy (jeśli znaleziono dla kodu pocztowego) ---
-if not st.session_state.matching_ulic_df.empty:
-    st.subheader("Wybór ulicy (z wyników dla kodu pocztowego)")
-    if st.session_state.ulica_z_kodu:
-        st.info(f"Ulica sugerowana na podstawie kodu pocztowego: '{st.session_state.ulica_z_kodu}'. Możesz wybrać inną z listy poniżej.")
-    lista_ulic_opcje = [""] + sorted(st.session_state.matching_ulic_df['NAZWA_ULICY'].unique().tolist())
-    default_index = 0
-    if st.session_state.ulica_z_kodu and st.session_state.ulica_z_kodu in lista_ulic_opcje:
-        try: default_index = lista_ulic_opcje.index(st.session_state.ulica_z_kodu)
-        except ValueError: default_index = 0
-    wybrana_ulica = st.selectbox("Wybierz ulicę z listy TERYT:", lista_ulic_opcje, index=default_index, key="sel_ulica")
-    if wybrana_ulica:
-        dane_wybranej_ulicy = st.session_state.matching_ulic_df[st.session_state.matching_ulic_df['NAZWA_ULICY'] == wybrana_ulica].iloc[0]
-        st.write(f"Wybrano ulicę: **{wybrana_ulica}**")
-        st.write(f"**Kod ULIC (SYM_UL):** {int(dane_wybranej_ulicy['SYM_UL']):05d} (z TERYT)")
-        st.write(f"**Cecha:** {dane_wybranej_ulicy['CECHA']}")
-
-
-
-# Sekcja wyświetlania surowych danych (opcjonalnie, na dole)
-st.divider()
-with st.expander("Podgląd załadowanych plików CSV"):
-    if loaded_files:
-        selected_file = st.selectbox("Wybierz plik do wyświetlenia:", loaded_files, key="sel_raw_file")
-        if selected_file in dataframes:
-            st.write(f"Wyświetlanie DataFrame dla **{selected_file}**:")
-            st.dataframe(dataframes[selected_file])
-        else:
-            st.warning(f"DataFrame dla pliku {selected_file} nie jest dostępny.")
+    target_miejscowosc = None
+    if miejscowosc:
+        target_miejscowosc = next((m for m in lista_miejscowosci if m.lower() == miejscowosc.strip().lower()), None)
+        if not target_miejscowosc:
+             raise HTTPException(status_code=404, detail=f"Miejscowość '{miejscowosc}' nie została znaleziona dla kodu pocztowego {postal_code}. Dostępne: {', '.join(lista_miejscowosci)}")
+    elif len(lista_miejscowosci) == 1:
+        target_miejscowosc = lista_miejscowosci[0]
     else:
-        st.write("Nie załadowano żadnych plików CSV.")
+         raise HTTPException(status_code=400, detail="Nie można określić miejscowości. Podaj parametr 'miejscowosc'.")
 
+    dane_miejscowosci_row = pasujace_miejscowosci_df[pasujace_miejscowosci_df['MIEJSCOWOŚĆ_CLEAN'] == target_miejscowosc].iloc[0]
+    woj_nazwa = dane_miejscowosci_row.get('WOJEWÓDZTWO')
+    pow_nazwa = dane_miejscowosci_row.get('POWIAT')
+    gmi_nazwa = dane_miejscowosci_row.get('GMINA')
+    ulica_z_kodu = dane_miejscowosci_row.get('ULICA') if pd.notna(dane_miejscowosci_row.get('ULICA')) else None
+    numery_z_kodu = dane_miejscowosci_row.get('NUMERY') if pd.notna(dane_miejscowosci_row.get('NUMERY')) else None
+
+    if not all([woj_nazwa, pow_nazwa, gmi_nazwa]):
+         missing_info = [name for name, val in [('WOJEWÓDZTWO', woj_nazwa), ('POWIAT', pow_nazwa), ('GMINA', gmi_nazwa)] if not val]
+         logger.error(f"Brakujące dane w pliku kodów pocztowych dla {target_miejscowosc} ({postal_code}): {', '.join(missing_info)}")
+         raise HTTPException(status_code=500, detail=f"Niekompletne dane w pliku kodów pocztowych dla {target_miejscowosc}. Brakuje: {', '.join(missing_info)}")
+
+    terc_woj, terc_pow, terc_gmi_full = get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, target_miejscowosc)
+    sym_code, simc_nazwa_oficjalna = None, None
+    if terc_gmi_full:
+        sym_code, simc_nazwa_oficjalna = get_simc_code(terc_gmi_full, target_miejscowosc, gmi_nazwa)
+    ulic_df = pd.DataFrame()
+    if terc_gmi_full and sym_code:
+        ulic_df = get_ulic_data(terc_gmi_full, sym_code)
+
+    response = {
+        "query": {"postal_code": postal_code, "miejscowosc_input": miejscowosc, "miejscowosc_selected": target_miejscowosc},
+        "location_from_postal_code": {"miejscowosc": target_miejscowosc, "wojewodztwo": woj_nazwa, "powiat": pow_nazwa, "gmina": gmi_nazwa, "ulica_suggestion": ulica_z_kodu, "numery_suggestion": numery_z_kodu},
+        "teryt_codes": {"terc_woj": terc_woj, "terc_pow": terc_pow, "terc_gmi": terc_gmi_full, "simc": sym_code, "simc_official_name": simc_nazwa_oficjalna},
+        "ulic_data": ulic_df.to_dict(orient='records') if not ulic_df.empty else []
+    }
+    return response
+
+# --- Uruchomienie aplikacji ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
