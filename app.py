@@ -75,21 +75,21 @@ if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
             # Znajdź kod TERC województwa
             woj_row = terc_data[terc_data['NAZWA'].str.lower() == wojewodztwo.lower()]
             if not woj_row.empty:
-                terc_woj = f"{woj_row['WOJ'].iloc[0]}"
+                terc_woj = f"{int(woj_row['WOJ'].iloc[0]):02d}"
             else:
                 terc_woj = None
 
             # Znajdź kod TERC powiatu
             pow_row = terc_data[terc_data['NAZWA'].str.lower() == powiat.lower()]
             if not pow_row.empty:
-                terc_powiat = f"{pow_row['WOJ'].iloc[0]}{pow_row['POW'].iloc[0]}"
+                terc_powiat = f"{int(pow_row['WOJ'].iloc[0]):02d}{int(pow_row['POW'].iloc[0]):02d}"
             else:
                 terc_powiat = None
 
             # Znajdź kod TERC gminy
             gmi_row = terc_data[terc_data['NAZWA'].str.lower() == gmina.lower()]
             if not gmi_row.empty:
-                terc_gmina = f"{gmi_row['WOJ'].iloc[0]}{gmi_row['POW'].iloc[0]}{gmi_row['GMI'].iloc[0]}"
+                terc_gmina = f"{int(gmi_row['WOJ'].iloc[0]):02d}{int(gmi_row['POW'].iloc[0]):02d}{int(gmi_row['GMI'].iloc[0]):02d}"
             else:
                 terc_gmina = None
 
