@@ -108,6 +108,23 @@ if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
             else:
                 terc_gmina = None
 
+            # Jeśli terc_gmina nadal jest None, spróbuj użyć nazwy miejscowości
+            if terc_gmina is None:
+                gmi_row = terc_data[terc_data['NAZWA'].str.lower() == miejscowosc.lower()]
+                if not gmi_row.empty:
+                    try:
+                        woj = int(gmi_row['WOJ'].iloc[0]) if not pd.isna(gmi_row['WOJ'].iloc[0]) else None
+                        powiat = int(gmi_row['POW'].iloc[0]) if not pd.isna(gmi_row['POW'].iloc[0]) else None
+                        gmina_code = int(gmi_row['GMI'].iloc[0]) if not pd.isna(gmi_row['GMI'].iloc[0]) else None
+                        rodz = int(gmi_row['RODZ'].iloc[0]) if not pd.isna(gmi_row['RODZ'].iloc[0]) else None
+
+                        if None not in (woj, powiat, gmina_code, rodz):
+                            terc_gmina = f"{woj:02d}{powiat:02d}{gmina_code:02d}{rodz}"
+                        else:
+                            terc_gmina = None
+                    except ValueError:
+                        terc_gmina = None
+
         st.write(f"Wybrano miejscowość: {miejscowosc}")
         st.write(f"**Województwo:** {wojewodztwo} (TERC: {terc_woj})")
         st.write(f"**Powiat:** {powiat} (TERC: {terc_powiat})")
