@@ -35,7 +35,7 @@ if os.path.exists(data_dir):
                 st.error(f"Nieoczekiwany błąd podczas ładowania {file_name}: {e}")
 
 # Streamlit app to display DataFrames
-st.title("Przeglądarka DataFrames")
+st.title("Uteryterowana terytowarka")
 
 # Dodajmy obsługę kodów pocztowych
 kod_pocztowy = st.text_input("Wprowadź kod pocztowy:", "")
@@ -43,6 +43,10 @@ miejscowosc = None  # Inicjalizacja zmiennej miejscowość
 
 if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
     df_kody_pocztowe = dataframes['kody_pocztowe.csv']
+
+    # Wyodrębnij nazwy w nawiasach, jeśli istnieją
+    df_kody_pocztowe['MIEJSCOWOŚĆ'] = df_kody_pocztowe['MIEJSCOWOŚĆ'].str.extract(r'\((.*?)\)', expand=False).fillna(df_kody_pocztowe['MIEJSCOWOŚĆ'])
+
     # Filtruj DataFrame po kodzie pocztowym.
     pasujace_miejscowosci = df_kody_pocztowe[df_kody_pocztowe['PNA'] == kod_pocztowy]
     # Pobierz unikalne nazwy miejscowości.
@@ -89,7 +93,18 @@ if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
             # Znajdź kod TERC gminy
             gmi_row = terc_data[terc_data['NAZWA'].str.lower() == gmina.lower()]
             if not gmi_row.empty:
-                terc_gmina = f"{int(gmi_row['WOJ'].iloc[0]):02d}{int(gmi_row['POW'].iloc[0]):02d}{int(gmi_row['GMI'].iloc[0]):02d}{int(gmi_row['RODZ'].iloc[0])}"
+                try:
+                    woj = int(gmi_row['WOJ'].iloc[0]) if not pd.isna(gmi_row['WOJ'].iloc[0]) else None
+                    powiat = int(gmi_row['POW'].iloc[0]) if not pd.isna(gmi_row['POW'].iloc[0]) else None
+                    gmina_code = int(gmi_row['GMI'].iloc[0]) if not pd.isna(gmi_row['GMI'].iloc[0]) else None
+                    rodz = int(gmi_row['RODZ'].iloc[0]) if not pd.isna(gmi_row['RODZ'].iloc[0]) else None
+
+                    if None not in (woj, powiat, gmina_code, rodz):
+                        terc_gmina = f"{woj:02d}{powiat:02d}{gmina_code:02d}{rodz}"
+                    else:
+                        terc_gmina = None
+                except ValueError:
+                    terc_gmina = None
             else:
                 terc_gmina = None
 
