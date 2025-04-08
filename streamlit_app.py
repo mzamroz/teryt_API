@@ -87,7 +87,7 @@ def make_api_request(method, endpoint, params=None, json_data=None, path_params=
 def reset_dependent_state(level):
     """Resetuje stan zależny od poziomu zmiany (postal_code, locality, street)."""
     if level <= 'postal_code':
-        st.session_state.localities_list = None
+        #st.session_state.localities_list = None
         st.session_state.selected_locality = None
     if level <= 'locality':
         st.session_state.details_data = None
