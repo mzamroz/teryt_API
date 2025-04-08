@@ -7,6 +7,7 @@ dataframes = {}
 data_dir = './dane'
 loaded_files = []  # Keep track of successfully loaded files
 terc_data = None  # Zmienna do przechowywania danych TERC
+simc_data = None  # Zmienna do przechowywania danych SIMC
 
 if os.path.exists(data_dir):
     for file_name in os.listdir(data_dir):
@@ -14,12 +15,13 @@ if os.path.exists(data_dir):
             file_path = os.path.join(data_dir, file_name)
             try:
                 # Attempt to read the CSV file with error handling
-                # Używam 'utf-8' jako domyślnego kodowania, ale dodaję obsługę błędów
                 df = pd.read_csv(file_path, delimiter=';', on_bad_lines='skip', encoding='utf-8')
                 dataframes[file_name] = df
                 loaded_files.append(file_name)  # Add to the list of loaded files
                 if file_name == 'TERC_Adresowy_2025-04-08.csv':
                     terc_data = df  # Przypisanie DataFrame do terc_data
+                elif file_name == 'SIMC_Adresowy_2025-04-08.csv':  # Dodaj obsługę pliku SIMC
+                    simc_data = df  # Przypisanie DataFrame do simc_data
             except pd.errors.ParserError as e:
                 st.warning(f"Błąd podczas ładowania {file_name}: {e}. Pomijam ten plik.")
             except UnicodeDecodeError:
@@ -28,6 +30,8 @@ if os.path.exists(data_dir):
                     df = pd.read_csv(file_path, delimiter=';', on_bad_lines='skip', encoding='latin1')
                     dataframes[file_name] = df
                     loaded_files.append(file_name)
+                    if file_name == 'SIMC_Adresowy_2025-04-08.csv':  # Dodaj obsługę pliku SIMC
+                        simc_data = df  # Przypisanie DataFrame do simc_data
                     st.warning(f"Plik {file_name} załadowano używając kodowania 'latin1'.")
                 except Exception as e:
                     st.error(f"Nieoczekiwany błąd podczas ładowania {file_name}: {e}")
@@ -135,6 +139,35 @@ if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
         else:
             st.write(f"Ulica i numery nie są dostępne w danych.")
 
+# Obsługa kodów SIMC
+if simc_data is not None and miejscowosc:
+    # Przygotuj wartości z TERC do wyszukiwania w SIMC
+    if terc_gmina:
+        woj = terc_gmina[:2]
+        pow = terc_gmina[2:4]
+        gmi = terc_gmina[4:6]
+        rodz_gmi = terc_gmina[6]
+        
+        # Wyszukaj w SIMC na podstawie kodów z TERC
+        matching_simc = simc_data[
+            (simc_data['WOJ'] == int(woj)) & 
+            (simc_data['POW'] == int(pow)) & 
+            (simc_data['GMI'] == int(gmi)) & 
+            (simc_data['RODZ_GMI'] == int(rodz_gmi)) 
+        ]
+        
+        if not matching_simc.empty:
+            st.write("### Znaleziono kod SIMC:")
+            # Wyświetl kod SYM dla znalezionej miejscowości
+            sym_code = matching_simc.iloc[0]['SYM']
+            st.write(f"Kod SIMC (SYM) dla miejscowości {miejscowosc}: **{sym_code}**")
+            
+            # Wyświetl szczegóły z rejestru SIMC
+            st.write("Szczegóły z rejestru SIMC:")
+            st.dataframe(matching_simc[['SYM', 'SYMPOD', 'NAZWA', 'WOJ', 'POW', 'GMI', 'RODZ_GMI', 'RM', 'MZ']])
+        else:
+            st.warning(f"Nie znaleziono kodu SIMC dla miejscowości {miejscowosc} z podanymi kodami TERC")
+
 if loaded_files:  # Check if any files were loaded
     selected_file = st.selectbox("Wybierz plik do wyświetlenia:", loaded_files)
     st.write(f"Wyświetlanie DataFrame dla **{selected_file}**:")
@@ -144,6 +177,5 @@ else:
     st.write(
         "Nie załadowano żadnych DataFrames. Upewnij się, że w katalogu './dane' znajdują się pliki CSV i są poprawnie sformatowane."
     )
-    if not os.path.exists(data_dir):
-        st.warning("Katalog './dane' nie istnieje.")
+    st.warning("Katalog './dane' nie istnieje.")
 
