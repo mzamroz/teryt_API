@@ -89,7 +89,7 @@ if kod_pocztowy and 'kody_pocztowe.csv' in dataframes:
             # Znajdź kod TERC gminy
             gmi_row = terc_data[terc_data['NAZWA'].str.lower() == gmina.lower()]
             if not gmi_row.empty:
-                terc_gmina = f"{int(gmi_row['WOJ'].iloc[0]):02d}{int(gmi_row['POW'].iloc[0]):02d}{int(gmi_row['GMI'].iloc[0]):02d}"
+                terc_gmina = f"{int(gmi_row['WOJ'].iloc[0]):02d}{int(gmi_row['POW'].iloc[0]):02d}{int(gmi_row['GMI'].iloc[0]):02d}{int(gmi_row['RODZ'].iloc[0])}"
             else:
                 terc_gmina = None
 
