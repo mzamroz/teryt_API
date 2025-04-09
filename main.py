@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 import logging
 from pydantic import BaseModel, Field
 import uvicorn # Potrzebne do uruchomienia
+from contextlib import asynccontextmanager
 
 # --- Konfiguracja ---
 DATA_DIR = os.getenv('DATA_DIR', './dane')
@@ -381,17 +382,20 @@ class TerytCodesResponse(BaseModel):
     message: Optional[str] = None # Dodatkowe informacje/ostrzeżenia
 
 # --- Inicjalizacja FastAPI ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Funkcja uruchamiana przy starcie i zamknięciu aplikacji FastAPI."""
+    # Kod uruchamiany przy starcie
+    load_data_on_startup()
+    yield
+    # Kod uruchamiany przy zamknięciu (jeśli potrzebny)
+
 app = FastAPI(
     title="API Danych Adresowych Polski",
     description="API do wyszukiwania informacji adresowych w Polsce na podstawie kodów pocztowych i danych TERYT.",
-    version="1.5.0" # Zwiększona wersja
+    version="1.5.0",
+    lifespan=lifespan # Dodane użycie nowego systemu lifespan
 )
-
-# --- Event handler - ładowanie danych przy starcie ---
-@app.on_event("startup")
-async def startup_event():
-    """Funkcja uruchamiana przy starcie aplikacji FastAPI."""
-    load_data_on_startup()
 
 # --- API Endpoints ---
 
@@ -411,7 +415,7 @@ async def health_check():
     response_model=LocalityListResponse
 )
 async def get_localities_by_postal_code(
-    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", regex=r"^\d{2}-\d{3}$")
+    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", pattern=r"^\d{2}-\d{3}$")
 ):
     """
     Na podstawie kodu pocztowego zwraca posortowaną listę unikalnych nazw miejscowości
@@ -442,7 +446,7 @@ async def get_localities_by_postal_code(
     response_model=PostalCodeDetailsResponse # Użyj nowego modelu odpowiedzi
 )
 async def lookup_postal_code_details(
-    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", regex=r"^\d{2}-\d{3}$"),
+    postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", pattern=r"^\d{2}-\d{3}$"),
     locality: Optional[str] = Query(None, description="Opcjonalnie: Nazwa miejscowości (miasto/wieś) do zawężenia wyników (jeśli kod pocztowy obejmuje wiele miejscowości)")
 ):
     """
@@ -562,7 +566,7 @@ async def lookup_postal_code_details(
     response_model=TerytCodesResponse # Użyj zaktualizowanego modelu
 )
 async def lookup_address_teryt_codes(
-    postal_code: str = Query(..., description="Kod pocztowy (np. '55-011')", regex=r"^\d{2}-\d{3}$"),
+    postal_code: str = Query(..., description="Kod pocztowy (np. '55-011')", pattern=r"^\d{2}-\d{3}$"),
     locality: str = Query(..., description="Nazwa miejscowości (miasto/wieś)", min_length=1),
     street_name: str = Query(..., description="Nazwa ulicy", min_length=1)
 ):
