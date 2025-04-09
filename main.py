@@ -391,8 +391,8 @@ async def lifespan(app: FastAPI):
     # Kod uruchamiany przy zamknięciu (jeśli potrzebny)
 
 app = FastAPI(
-    title="API Danych Adresowych Polski",
-    description="API do wyszukiwania informacji adresowych w Polsce na podstawie kodów pocztowych i danych TERYT.",
+    title="API Teryt",
+    description="API do wyszukiwania informacji TERYT.",
     version="1.5.0",
     lifespan=lifespan # Dodane użycie nowego systemu lifespan
 )
@@ -418,8 +418,8 @@ async def get_localities_by_postal_code(
     postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", pattern=r"^\d{2}-\d{3}$")
 ):
     """
-    Na podstawie kodu pocztowego zwraca posortowaną listę unikalnych nazw miejscowości
-    (miast, wsi) przypisanych do tego kodu w pliku kodów pocztowych.
+    Na podstawie kodu pocztowego zwraca posortowaną alfabetycznie listę nazw miejscowości
+    przypisanych do tego kodu.
     """
     if kody_pocztowe_data is None:
         raise HTTPException(status_code=503, detail="Dane kodów pocztowych nie są załadowane. Spróbuj ponownie później.")
@@ -453,8 +453,7 @@ async def lookup_postal_code_details(
     Na podstawie kodu pocztowego zwraca szczegółowe dane TERYT (TERC, SIMC, ULIC).
     Jeśli kod pocztowy obejmuje wiele miejscowości, *musisz* podać parametr 'locality',
     aby uzyskać szczegóły dla konkretnej z nich. W przeciwnym razie, jeśli tylko jedna miejscowość
-    pasuje do kodu, jej szczegóły są zwracane automatycznie.
-    Użyj endpointu `/postal_codes/{postal_code}/localities` jeśli nie jesteś pewien.
+    pasuje do kodu, jej szczegóły są zwracane od razu.
     """
     if kody_pocztowe_data is None:
         raise HTTPException(status_code=503, detail="Dane kodów pocztowych nie są załadowane.")
@@ -567,7 +566,7 @@ async def lookup_postal_code_details(
 )
 async def lookup_address_teryt_codes(
     postal_code: str = Query(..., description="Kod pocztowy (np. '55-011')", pattern=r"^\d{2}-\d{3}$"),
-    locality: str = Query(..., description="Nazwa miejscowości (miasto/wieś)", min_length=1),
+    locality: str = Query(..., description="Nazwa miejscowości", min_length=1),
     street_name: str = Query(..., description="Nazwa ulicy", min_length=1)
 ):
     """
