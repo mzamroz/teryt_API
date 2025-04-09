@@ -326,8 +326,16 @@ def get_ulic_data(terc_gmi_full, simc_code):
                     'STAN_NA': 'valid_as_of'
                 }
             )
-             # Konwertuj 'ulic_code' na string, zachowując wiodące zera jeśli istnieją
+            # Konwertuj 'ulic_code' na string, zachowując wiodące zera jeśli istnieją
             result_df['ulic_code'] = result_df['ulic_code'].astype(str)
+            
+            # Fix: Replace NaN values with empty strings in 'feature_type'
+            result_df['feature_type'] = result_df['feature_type'].fillna('')
+            
+            # Fix: Also replace NaN values in other string columns to avoid potential issues
+            result_df['street_name'] = result_df['street_name'].fillna('')
+            result_df['valid_as_of'] = result_df['valid_as_of'].fillna('')
+            
             return result_df
         else:
             logger.warning(f"Nie znaleziono kodów ULIC dla SIMC: {simc_code} (TERC GMI: {terc_gmi_full}).")
@@ -512,6 +520,17 @@ async def lookup_postal_code_details(
          logger.warning(f"Nie można wyszukać ULIC dla {target_miejscowosc}, brak TERC gminy ({terc_gmi_full}) lub SIMC ({sym_code}).")
 
 
+    # W przypadku problemu z konwersją DataFrame na słowniki dla Pydantic, dodaj dodatkową obróbkę
+    streets_list = []
+    if not ulic_df.empty:
+        # Fix: Additional safety check before conversion
+        ulic_df_clean = ulic_df.copy()
+        # Ensure all string columns have string values (not NaN)
+        for col in ['feature_type', 'street_name', 'valid_as_of']:
+            if col in ulic_df_clean.columns:
+                ulic_df_clean[col] = ulic_df_clean[col].fillna('')
+        streets_list = ulic_df_clean.to_dict(orient='records')
+    
     # Przygotuj odpowiedź
     response = PostalCodeDetailsResponse(
         query={"postal_code": postal_code, "locality_input": locality, "locality_selected": target_miejscowosc},
@@ -530,7 +549,7 @@ async def lookup_postal_code_details(
             "simc": sym_code,
             "simc_official_name": simc_nazwa_oficjalna # Dodano oficjalną nazwę
         },
-        streets=ulic_df.to_dict(orient='records') if not ulic_df.empty else [] # Konwertuj DataFrame ulic na listę słowników
+        streets=streets_list # Użyj oczyszczonej listy zamiast bezpośredniej konwersji
     )
 
     return response

@@ -5,7 +5,7 @@ import re # Do walidacji kodu pocztowego
 
 # --- Konfiguracja ---
 st.set_page_config(page_title="Wyszukiwarka TERYT", layout="wide")
-st.title("Wyszukiwarka Kodów TERYT i Danych Adresowych")
+st.title("Wyszukiwarka Kodów TERYT")
 
 # --- Inicjalizacja Session State ---
 # Klucze dla stanu aplikacji
@@ -296,4 +296,6 @@ with st.expander("Debug: Session State"):
 
 # --- Stopka ---
 st.markdown("---")
-st.caption("teryt")
+st.caption("Teryt API Explorer - Wersja 1.0")
+st.caption("ESV 2025") 
+
