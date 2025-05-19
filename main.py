@@ -1,7 +1,8 @@
 # main.py
 import os
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Path
+from fastapi import FastAPI, HTTPException, Query, Path, Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional, Dict, Any
 import logging
 from pydantic import BaseModel, Field
@@ -30,6 +31,15 @@ simc_data: Optional[pd.DataFrame] = None
 ulic_data: Optional[pd.DataFrame] = None
 ulic_data_enriched: Optional[pd.DataFrame] = None
 kody_pocztowe_data: Optional[pd.DataFrame] = None
+
+# --- Konfiguracja autentykacji ---
+API_TOKEN = os.getenv("API_TOKEN", "supersekretnytoken")  # Ustaw swój token lub pobierz z env
+
+security = HTTPBearer()
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if credentials.scheme != "Bearer" or credentials.credentials != API_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
 
 # --- Funkcje pomocnicze ---
 
@@ -412,7 +422,8 @@ async def health_check():
     "/postal_codes/{postal_code}/localities",
     summary="Zwraca listę miejscowości dla podanego kodu pocztowego",
     tags=["Lookup"],
-    response_model=LocalityListResponse
+    response_model=LocalityListResponse,
+    dependencies=[Depends(verify_token)]
 )
 async def get_localities_by_postal_code(
     postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", pattern=r"^\d{2}-\d{3}$")
@@ -443,7 +454,8 @@ async def get_localities_by_postal_code(
     "/postal_codes/{postal_code}/details",
     summary="Wyszukuje szczegółowe informacje adresowe dla kodu pocztowego",
     tags=["Lookup"],
-    response_model=PostalCodeDetailsResponse # Użyj nowego modelu odpowiedzi
+    response_model=PostalCodeDetailsResponse, 
+    dependencies=[Depends(verify_token)]
 )
 async def lookup_postal_code_details(
     postal_code: str = Path(..., description="Kod pocztowy w formacie XX-XXX", pattern=r"^\d{2}-\d{3}$"),
@@ -562,7 +574,8 @@ async def lookup_postal_code_details(
     "/lookup/address",
     summary="Wyszukuje kody TERYT dla konkretnego adresu",
     tags=["Lookup"],
-    response_model=TerytCodesResponse # Użyj zaktualizowanego modelu
+    response_model=TerytCodesResponse, 
+    dependencies=[Depends(verify_token)]
 )
 async def lookup_address_teryt_codes(
     postal_code: str = Query(..., description="Kod pocztowy (np. '55-011')", pattern=r"^\d{2}-\d{3}$"),
