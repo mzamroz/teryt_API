@@ -590,18 +590,60 @@ async def lookup_postal_code_details(
         logger.error(f"Niekompletne dane administracyjne w pliku kodów pocztowych dla {target_miejscowosc} ({postal_code}): {', '.join(missing_info)}")
         raise HTTPException(status_code=500, detail=f"Niekompletne dane w pliku kodów pocztowych dla {target_miejscowosc}. Brakuje: {', '.join(missing_info)}")
 
-    # Najpierw znajdź RODZ_GMI dla miejscowości z SIMC (miasto vs wieś)
-    rodz_gmi_hint = get_rodz_gmi_from_simc(woj_nazwa, pow_nazwa, gmi_nazwa, target_miejscowosc)
-
-    # Wyszukaj kody TERC z hintem RODZ_GMI
-    terc_woj, terc_pow, terc_gmi_full = get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, target_miejscowosc, rodz_gmi_hint)
-
-    # Wyszukaj kod SIMC (wymaga pełnego TERC gminy)
-    sym_code, simc_nazwa_oficjalna = None, None
-    if terc_gmi_full:
-        sym_code, simc_nazwa_oficjalna = get_simc_code(terc_gmi_full, target_miejscowosc, gmi_nazwa)
-    else:
-        logger.warning(f"Nie można wyszukać SIMC, ponieważ nie udało się ustalić pełnego kodu TERC gminy dla {target_miejscowosc}.")
+    # --- Znajdź kody TERC i SIMC ---
+    # Najpierw znajdź kod SIMC bezpośrednio dla miejscowości
+    sym_code, simc_nazwa_oficjalna, terc_gmi_full = None, None, None
+    
+    try:
+        # Znajdź kody województwa i powiatu z TERC
+        woj_row = terc_data[terc_data['NAZWA'].str.lower() == woj_nazwa.lower()] if terc_data is not None else pd.DataFrame()
+        if not woj_row.empty:
+            woj_code = woj_row['WOJ'].iloc[0]
+            
+            pow_row = terc_data[
+                (terc_data['NAZWA'].str.lower() == pow_nazwa.lower()) &
+                (terc_data['WOJ'] == woj_code) &
+                (terc_data['POW'].notna()) &
+                (terc_data['GMI'].isna())
+            ] if terc_data is not None else pd.DataFrame()
+            
+            if not pow_row.empty:
+                pow_code = pow_row['POW'].iloc[0]
+                
+                # Wyszukaj miejscowość bezpośrednio w SIMC
+                matching_simc = simc_data[
+                    (simc_data['WOJ'] == woj_code) &
+                    (simc_data['POW'] == pow_code) &
+                    (simc_data['NAZWA'].str.strip().str.lower() == target_miejscowosc.lower())
+                ] if simc_data is not None else pd.DataFrame()
+                
+                if not matching_simc.empty:
+                    # Znaleziono miejscowość - pobierz jej dane
+                    simc_row = matching_simc.iloc[0]
+                    sym_code = simc_row['SYM']
+                    simc_nazwa_oficjalna = simc_row['NAZWA']
+                    gmi_code = simc_row['GMI']
+                    rodz_gmi = simc_row['RODZ_GMI']
+                    
+                    # Zbuduj pełny kod TERC gminy z danych SIMC
+                    terc_gmi_full = f"{woj_code}{pow_code}{gmi_code}{rodz_gmi}"
+                    terc_woj = woj_code
+                    terc_pow = f"{woj_code}{pow_code}"
+                    
+                    logger.info(f"Znaleziono miejscowość '{target_miejscowosc}' w SIMC: SYM={sym_code}, TERC_GMI={terc_gmi_full}")
+    except Exception as e:
+        logger.error(f"Błąd podczas wyszukiwania miejscowości w SIMC: {e}")
+    
+    # Jeśli nie znaleziono miejscowości bezpośrednio, użyj starej metody z fallbackiem
+    if not sym_code:
+        logger.warning(f"Nie znaleziono miejscowości '{target_miejscowosc}' bezpośrednio w SIMC. Próba z fallbackiem...")
+        rodz_gmi_hint = get_rodz_gmi_from_simc(woj_nazwa, pow_nazwa, gmi_nazwa, target_miejscowosc)
+        terc_woj, terc_pow, terc_gmi_full = get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, target_miejscowosc, rodz_gmi_hint)
+        
+        if terc_gmi_full:
+            sym_code, simc_nazwa_oficjalna = get_simc_code(terc_gmi_full, target_miejscowosc, gmi_nazwa)
+        else:
+            logger.warning(f"Nie można wyszukać SIMC, ponieważ nie udało się ustalić pełnego kodu TERC gminy dla {target_miejscowosc}.")
 
 
     # Wyszukaj dane ULIC (wymaga pełnego TERC gminy i kodu SIMC)
@@ -621,6 +663,10 @@ async def lookup_postal_code_details(
         for col in ['feature_type', 'street_name', 'valid_as_of']:
             if col in ulic_df_clean.columns:
                 ulic_df_clean[col] = ulic_df_clean[col].fillna('')
+        
+        # Combine feature_type with street_name
+        ulic_df_clean['street_name'] = (ulic_df_clean['feature_type'] + ' ' + ulic_df_clean['street_name']).str.strip()
+        
         streets_list = ulic_df_clean.to_dict(orient='records')
     
     # Przygotuj odpowiedź
@@ -697,19 +743,64 @@ async def lookup_address_teryt_codes(
         raise HTTPException(status_code=500, detail=f"Niekompletne dane administracyjne w pliku kodów pocztowych dla {locality_clean}. Brakuje: {', '.join(missing_info)}")
 
     # --- Krok 2: Znajdź kody TERC i SIMC ---
-    # Najpierw znajdź RODZ_GMI dla miejscowości z SIMC (miasto vs wieś)
-    rodz_gmi_hint = get_rodz_gmi_from_simc(woj_nazwa, pow_nazwa, gmi_nazwa, locality_clean)
-
-    # Wyszukaj kody TERC z hintem RODZ_GMI
-    terc_woj, terc_pow, terc_gmi_full = get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, locality_clean, rodz_gmi_hint)
-    if not terc_gmi_full:
-        logger.warning(f"Nie udało się ustalić pełnego kodu TERC gminy dla {locality_clean}, Gmina {gmi_nazwa}, Powiat {pow_nazwa}")
-        raise HTTPException(status_code=404, detail="Nie udało się ustalić pełnego kodu TERC gminy dla podanych danych lokalizacyjnych.")
-
-    sym_code, simc_nazwa_oficjalna = get_simc_code(terc_gmi_full, locality_clean, gmi_nazwa)
+    # Najpierw znajdź kod SIMC bezpośrednio dla miejscowości
+    # Wyszukaj miejscowość w SIMC bez względu na RODZ_GMI
+    sym_code, simc_nazwa_oficjalna, terc_gmi_full = None, None, None
+    
+    try:
+        # Znajdź kody województwa i powiatu z TERC
+        woj_row = terc_data[terc_data['NAZWA'].str.lower() == woj_nazwa.lower()] if terc_data is not None else pd.DataFrame()
+        if not woj_row.empty:
+            woj_code = woj_row['WOJ'].iloc[0]
+            
+            pow_row = terc_data[
+                (terc_data['NAZWA'].str.lower() == pow_nazwa.lower()) &
+                (terc_data['WOJ'] == woj_code) &
+                (terc_data['POW'].notna()) &
+                (terc_data['GMI'].isna())
+            ] if terc_data is not None else pd.DataFrame()
+            
+            if not pow_row.empty:
+                pow_code = pow_row['POW'].iloc[0]
+                
+                # Wyszukaj miejscowość bezpośrednio w SIMC
+                matching_simc = simc_data[
+                    (simc_data['WOJ'] == woj_code) &
+                    (simc_data['POW'] == pow_code) &
+                    (simc_data['NAZWA'].str.strip().str.lower() == locality_clean.lower())
+                ] if simc_data is not None else pd.DataFrame()
+                
+                if not matching_simc.empty:
+                    # Znaleziono miejscowość - pobierz jej dane
+                    simc_row = matching_simc.iloc[0]
+                    sym_code = simc_row['SYM']
+                    simc_nazwa_oficjalna = simc_row['NAZWA']
+                    gmi_code = simc_row['GMI']
+                    rodz_gmi = simc_row['RODZ_GMI']
+                    
+                    # Zbuduj pełny kod TERC gminy z danych SIMC
+                    terc_gmi_full = f"{woj_code}{pow_code}{gmi_code}{rodz_gmi}"
+                    terc_woj = woj_code
+                    terc_pow = f"{woj_code}{pow_code}"
+                    
+                    logger.info(f"Znaleziono miejscowość '{locality_clean}' w SIMC: SYM={sym_code}, TERC_GMI={terc_gmi_full}")
+    except Exception as e:
+        logger.error(f"Błąd podczas wyszukiwania miejscowości w SIMC: {e}")
+    
+    # Jeśli nie znaleziono miejscowości bezpośrednio, użyj starej metody z fallbackiem
     if not sym_code:
-        logger.warning(f"Nie udało się ustalić kodu SIMC dla {locality_clean} (TERC GMI: {terc_gmi_full})")
-        raise HTTPException(status_code=404, detail=f"Nie udało się ustalić kodu SIMC dla miejscowości '{locality_clean}'.")
+        logger.warning(f"Nie znaleziono miejscowości '{locality_clean}' bezpośrednio w SIMC. Próba z fallbackiem...")
+        rodz_gmi_hint = get_rodz_gmi_from_simc(woj_nazwa, pow_nazwa, gmi_nazwa, locality_clean)
+        terc_woj, terc_pow, terc_gmi_full = get_terc_codes(woj_nazwa, pow_nazwa, gmi_nazwa, locality_clean, rodz_gmi_hint)
+        
+        if not terc_gmi_full:
+            logger.warning(f"Nie udało się ustalić pełnego kodu TERC gminy dla {locality_clean}, Gmina {gmi_nazwa}, Powiat {pow_nazwa}")
+            raise HTTPException(status_code=404, detail="Nie udało się ustalić pełnego kodu TERC gminy dla podanych danych lokalizacyjnych.")
+        
+        sym_code, simc_nazwa_oficjalna = get_simc_code(terc_gmi_full, locality_clean, gmi_nazwa)
+        if not sym_code:
+            logger.warning(f"Nie udało się ustalić kodu SIMC dla {locality_clean} (TERC GMI: {terc_gmi_full})")
+            raise HTTPException(status_code=404, detail=f"Nie udało się ustalić kodu SIMC dla miejscowości '{locality_clean}'.")
 
     # --- Krok 3: Znajdź kod ULIC dla podanej ulicy, jeśli podano ---
     ulic_code = None
@@ -728,8 +819,35 @@ async def lookup_address_teryt_codes(
                 (ulic_data_enriched['SYM'] == sym_code)
             ]
             if not candidate_streets_df.empty:
+                # Create temporary columns for matching
+                # Build the name from NAZWA_2 and NAZWA_1 columns (without CECHA)
+                def build_street_name_without_cecha(row):
+                    nazwa_2 = row.get('NAZWA_2', '') if pd.notna(row.get('NAZWA_2')) else ''
+                    nazwa_1 = row.get('NAZWA_1', '') if pd.notna(row.get('NAZWA_1')) else ''
+                    if nazwa_2:
+                        return f"{nazwa_2} {nazwa_1}".strip()
+                    else:
+                        return nazwa_1.strip()
+                
+                # Build full name with CECHA
+                def build_street_name_with_cecha(row):
+                    cecha = row.get('CECHA', '') if pd.notna(row.get('CECHA')) else ''
+                    nazwa_2 = row.get('NAZWA_2', '') if pd.notna(row.get('NAZWA_2')) else ''
+                    nazwa_1 = row.get('NAZWA_1', '') if pd.notna(row.get('NAZWA_1')) else ''
+                    
+                    if nazwa_2:
+                        return f"{cecha} {nazwa_2} {nazwa_1}".strip()
+                    else:
+                        return f"{cecha} {nazwa_1}".strip()
+                
+                candidate_streets_df = candidate_streets_df.copy()
+                candidate_streets_df['NAZWA_BEZ_CECHY'] = candidate_streets_df.apply(build_street_name_without_cecha, axis=1)
+                candidate_streets_df['NAZWA_Z_CECHA'] = candidate_streets_df.apply(build_street_name_with_cecha, axis=1)
+                
+                # Try matching by both: with CECHA or without CECHA
                 matching_street_df = candidate_streets_df[
-                    candidate_streets_df['NAZWA_ULICY_FULL'].str.strip().str.lower() == street_name_clean.lower()
+                    (candidate_streets_df['NAZWA_BEZ_CECHY'].str.lower() == street_name_clean.lower()) |
+                    (candidate_streets_df['NAZWA_Z_CECHA'].str.lower() == street_name_clean.lower())
                 ]
                 if len(matching_street_df) == 1:
                     ulic_code = matching_street_df['SYM_UL'].iloc[0]
@@ -783,7 +901,21 @@ async def lookup_address_teryt_codes(
             (ulic_data_enriched['SYM'] == sym_code)
         ]
         if not candidate_streets_df.empty:
-            street_suggestions = sorted(candidate_streets_df['NAZWA_ULICY_FULL'].dropna().unique())
+            # Build full street names with CECHA (feature type) prefix
+            def build_full_street_name(row):
+                cecha = row.get('CECHA', '') if pd.notna(row.get('CECHA')) else ''
+                nazwa_2 = row.get('NAZWA_2', '') if pd.notna(row.get('NAZWA_2')) else ''
+                nazwa_1 = row.get('NAZWA_1', '') if pd.notna(row.get('NAZWA_1')) else ''
+                
+                if nazwa_2:
+                    return f"{cecha} {nazwa_2} {nazwa_1}".strip()
+                else:
+                    return f"{cecha} {nazwa_1}".strip()
+            
+            candidate_streets_df = candidate_streets_df.copy()
+            candidate_streets_df['FULL_NAME_WITH_CECHA'] = candidate_streets_df.apply(build_full_street_name, axis=1)
+            
+            street_suggestions = sorted(candidate_streets_df['FULL_NAME_WITH_CECHA'].dropna().unique())
             if street_suggestions:
                 message = f"Dla tej miejscowości dostępne są następujące ulice: {', '.join(street_suggestions[:10])}{'...' if len(street_suggestions)>10 else ''}"
 
