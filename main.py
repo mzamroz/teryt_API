@@ -733,15 +733,34 @@ async def lookup_address_teryt_codes(
                 ]
                 if len(matching_street_df) == 1:
                     ulic_code = matching_street_df['SYM_UL'].iloc[0]
-                    street_name_found = matching_street_df['NAZWA_ULICY_FULL'].iloc[0]
+                    # Combine CECHA, NAZWA_2, and NAZWA_1 for street_name_found
+                    cecha = matching_street_df['CECHA'].iloc[0] if pd.notna(matching_street_df['CECHA'].iloc[0]) else ''
+                    nazwa_2 = matching_street_df['NAZWA_2'].iloc[0] if 'NAZWA_2' in matching_street_df.columns and pd.notna(matching_street_df['NAZWA_2'].iloc[0]) else ''
+                    nazwa_1 = matching_street_df['NAZWA_1'].iloc[0] if 'NAZWA_1' in matching_street_df.columns and pd.notna(matching_street_df['NAZWA_1'].iloc[0]) else ''
+                    
+                    # Build street_name_found: CECHA + NAZWA_2 (if exists) + NAZWA_1
+                    if nazwa_2:
+                        street_name_found = f"{cecha} {nazwa_2} {nazwa_1}".strip()
+                    else:
+                        street_name_found = f"{cecha} {nazwa_1}".strip()
+                    
                     logger.info(f"Znaleziono unikalny ULIC {ulic_code} dla ulicy '{street_name_clean}' w SIMC {sym_code}")
+                    logger.info(f"Składniki nazwy ulicy: CECHA='{cecha}', NAZWA_2='{nazwa_2}', NAZWA_1='{nazwa_1}', WYNIK='{street_name_found}'")
                 elif len(matching_street_df) > 1:
                     ulic_codes_found = matching_street_df['SYM_UL'].tolist()
-                    street_names_found = matching_street_df['NAZWA_ULICY_FULL'].unique().tolist()
                     message = f"Znaleziono wiele wpisów dla ulicy '{street_name}'. Dane mogą być niespójne. Znalezione kody ULIC: {ulic_codes_found}"
                     logger.warning(message)
                     ulic_code = ulic_codes_found[0]
-                    street_name_found = street_names_found[0]
+                    # Combine CECHA, NAZWA_2, and NAZWA_1 for the first match
+                    first_match = matching_street_df.iloc[0]
+                    cecha = first_match['CECHA'] if pd.notna(first_match['CECHA']) else ''
+                    nazwa_2 = first_match['NAZWA_2'] if 'NAZWA_2' in matching_street_df.columns and pd.notna(first_match['NAZWA_2']) else ''
+                    nazwa_1 = first_match['NAZWA_1'] if 'NAZWA_1' in matching_street_df.columns and pd.notna(first_match['NAZWA_1']) else ''
+                    
+                    if nazwa_2:
+                        street_name_found = f"{cecha} {nazwa_2} {nazwa_1}".strip()
+                    else:
+                        street_name_found = f"{cecha} {nazwa_1}".strip()
                 else:
                     logger.warning(f"Ulica '{street_name_clean}' nie znaleziona w SIMC {sym_code} (TERC GMI: {terc_gmi_full})")
                     raise HTTPException(status_code=404, detail=f"Ulica '{street_name}' nie znaleziona w miejscowości '{locality}' (SIMC: {sym_code}).")
